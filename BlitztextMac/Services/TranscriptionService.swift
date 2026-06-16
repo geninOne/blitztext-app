@@ -124,8 +124,8 @@ enum TranscriptionService {
             }
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                log(success: false, status: nil, response: "Ungueltige Antwort")
-                throw TranscriptionError.networkError("Ungueltige Antwort")
+                log(success: false, status: nil, response: "Ungültige Antwort")
+                throw TranscriptionError.networkError("Ungültige Antwort")
             }
 
             guard httpResponse.statusCode == 200 else {
