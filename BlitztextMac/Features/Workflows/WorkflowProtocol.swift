@@ -116,6 +116,22 @@ protocol Workflow: AnyObject, Observable {
 
 // MARK: - App Settings
 
+/// Backend that handles the remote (online) requests: either OpenAI directly
+/// or an OpenAI-compatible proxy such as a LiteLLM gateway.
+enum APIProvider: String, Codable, CaseIterable, Identifiable {
+    case openAI
+    case liteLLM
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .openAI: return "OpenAI"
+        case .liteLLM: return "LiteLLM Gateway"
+        }
+    }
+}
+
 struct AppSettings: Codable {
     var hotkeyMode: HotkeyMode = .hold
     var hasSeenOnboarding: Bool = false
@@ -123,18 +139,35 @@ struct AppSettings: Codable {
     var selectedLocalTranscriptionModelName: String = LocalTranscriptionService.recommendedFastModelName
     var hasAutoSelectedFastLocalModel: Bool = false
 
+    // Remote provider selection. `openAI` keeps the original direct-to-OpenAI path.
+    var apiProvider: APIProvider = .openAI
+    var liteLLMBaseURL: String = ""
+    var liteLLMFastModel: String = "gpt-4o-mini"
+    var liteLLMStrongModel: String = "gpt-4o"
+    var liteLLMTranscriptionModel: String = "whisper-1"
+
     init(
         hotkeyMode: HotkeyMode = .hold,
         hasSeenOnboarding: Bool = false,
         secureLocalModeEnabled: Bool = false,
         selectedLocalTranscriptionModelName: String = LocalTranscriptionService.recommendedFastModelName,
-        hasAutoSelectedFastLocalModel: Bool = false
+        hasAutoSelectedFastLocalModel: Bool = false,
+        apiProvider: APIProvider = .openAI,
+        liteLLMBaseURL: String = "",
+        liteLLMFastModel: String = "gpt-4o-mini",
+        liteLLMStrongModel: String = "gpt-4o",
+        liteLLMTranscriptionModel: String = "whisper-1"
     ) {
         self.hotkeyMode = hotkeyMode
         self.hasSeenOnboarding = hasSeenOnboarding
         self.secureLocalModeEnabled = secureLocalModeEnabled
         self.selectedLocalTranscriptionModelName = selectedLocalTranscriptionModelName
         self.hasAutoSelectedFastLocalModel = hasAutoSelectedFastLocalModel
+        self.apiProvider = apiProvider
+        self.liteLLMBaseURL = liteLLMBaseURL
+        self.liteLLMFastModel = liteLLMFastModel
+        self.liteLLMStrongModel = liteLLMStrongModel
+        self.liteLLMTranscriptionModel = liteLLMTranscriptionModel
     }
 
     enum CodingKeys: String, CodingKey {
@@ -143,6 +176,11 @@ struct AppSettings: Codable {
         case secureLocalModeEnabled
         case selectedLocalTranscriptionModelName
         case hasAutoSelectedFastLocalModel
+        case apiProvider
+        case liteLLMBaseURL
+        case liteLLMFastModel
+        case liteLLMStrongModel
+        case liteLLMTranscriptionModel
     }
 
     init(from decoder: Decoder) throws {
@@ -158,6 +196,14 @@ struct AppSettings: Codable {
             Bool.self,
             forKey: .hasAutoSelectedFastLocalModel
         ) ?? false
+        apiProvider = try container.decodeIfPresent(APIProvider.self, forKey: .apiProvider) ?? .openAI
+        liteLLMBaseURL = try container.decodeIfPresent(String.self, forKey: .liteLLMBaseURL) ?? ""
+        liteLLMFastModel = try container.decodeIfPresent(String.self, forKey: .liteLLMFastModel) ?? "gpt-4o-mini"
+        liteLLMStrongModel = try container.decodeIfPresent(String.self, forKey: .liteLLMStrongModel) ?? "gpt-4o"
+        liteLLMTranscriptionModel = try container.decodeIfPresent(
+            String.self,
+            forKey: .liteLLMTranscriptionModel
+        ) ?? "whisper-1"
     }
 }
 

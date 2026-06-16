@@ -9,20 +9,15 @@ enum LLMError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured:
-            return "OpenAI API Key fehlt. Bitte in den Einstellungen hinterlegen."
+            return "API Key fehlt. Bitte in den Einstellungen hinterlegen."
         case .networkError(let msg):
             return "Verbindungsproblem: \(msg)"
         case .apiError(let msg):
-            return "Fehler von OpenAI: \(msg)"
+            return "Fehler vom Server: \(msg)"
         case .noContent:
             return "Keine Antwort erhalten. Bitte nochmal versuchen."
         }
     }
-}
-
-enum RewriteModel: String {
-    case fastEdit = "gpt-4o-mini"
-    case rageMode = "gpt-4o"
 }
 
 private struct OpenAIChatRequest: Encodable {
@@ -33,7 +28,21 @@ private struct OpenAIChatRequest: Encodable {
 
     let model: String
     let messages: [Message]
-    let temperature: Double
+    let temperature: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case temperature
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(model, forKey: .model)
+        try container.encode(messages, forKey: .messages)
+        // Omitted entirely when nil; some models reject a non-default temperature.
+        try container.encodeIfPresent(temperature, forKey: .temperature)
+    }
 }
 
 private struct OpenAIChatResponse: Decodable {
@@ -57,8 +66,6 @@ private struct OpenAIErrorResponse: Decodable {
 }
 
 enum LLMService {
-    private static let chatCompletionsURL = URL(string: "https://api.openai.com/v1/chat/completions")!
-
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.waitsForConnectivity = false
@@ -71,85 +78,122 @@ enum LLMService {
     static func improve(
         text: String,
         settings: TextImprovementSettings,
-        model: RewriteModel = .fastEdit
+        config: APIConfiguration
     ) async throws -> String {
         try await complete(
             text: text,
             systemPrompt: buildSystemPrompt(settings: settings),
-            model: model,
-            temperature: 0.3
+            model: config.fastModel,
+            temperature: 0.3,
+            task: "Text verbessern",
+            config: config
         )
     }
 
     static func dampfAblassen(
         text: String,
         systemPrompt: String,
-        model: RewriteModel = .rageMode
+        config: APIConfiguration
     ) async throws -> String {
         try await complete(
             text: text,
             systemPrompt: systemPrompt,
-            model: model,
-            temperature: 0.4
+            model: config.strongModel,
+            temperature: 0.4,
+            task: "Dampf ablassen",
+            config: config
         )
     }
 
     static func addEmojis(
         text: String,
         settings: EmojiTextSettings,
-        model: RewriteModel = .fastEdit
+        config: APIConfiguration
     ) async throws -> String {
         try await complete(
             text: text,
             systemPrompt: buildEmojiSystemPrompt(density: settings.emojiDensity),
-            model: model,
-            temperature: 0.3
+            model: config.fastModel,
+            temperature: 0.3,
+            task: "Emojis",
+            config: config
         )
     }
 
     private static func complete(
         text: String,
         systemPrompt: String,
-        model: RewriteModel,
-        temperature: Double
+        model: String,
+        temperature: Double,
+        task: String,
+        config: APIConfiguration
     ) async throws -> String {
-        guard let apiKey = KeychainService.load(key: .openAIAPIKey) else {
-            throw LLMError.notConfigured
-        }
-
+        let endpoint = config.chatCompletionsURL
         let payload = OpenAIChatRequest(
-            model: model.rawValue,
+            model: model,
             messages: [
                 .init(role: "system", content: systemPrompt),
                 .init(role: "user", content: text),
             ],
-            temperature: temperature
+            temperature: config.sendsTemperature ? temperature : nil
         )
 
-        var request = URLRequest(url: chatCompletionsURL)
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 45
         request.httpBody = try JSONEncoder().encode(payload)
 
-        let (data, response) = try await session.data(for: request)
+        func log(success: Bool, status: Int?, response: String) {
+            APILog.record(
+                task: task,
+                model: model,
+                endpoint: endpoint,
+                success: success,
+                status: status,
+                request: text,
+                response: response
+            )
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            log(success: false, status: nil, response: "Netzwerkfehler: \(error.localizedDescription)")
+            throw error
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            log(success: false, status: nil, response: "Keine gültige Antwort")
             throw LLMError.networkError("Keine gültige Antwort")
         }
 
         guard httpResponse.statusCode == 200 else {
+            let detail = openAIErrorMessage(from: data) ?? APILog.bodyPreview(data) ?? "Status \(httpResponse.statusCode)"
+            log(success: false, status: httpResponse.statusCode, response: detail)
             throw LLMError.apiError(openAIErrorMessage(from: data) ?? "Status \(httpResponse.statusCode)")
         }
 
-        let result = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
+        let result: OpenAIChatResponse
+        do {
+            result = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
+        } catch {
+            log(success: false, status: 200, response: APILog.bodyPreview(data) ?? "Antwort nicht lesbar")
+            throw LLMError.apiError("Antwort konnte nicht gelesen werden.")
+        }
+
         guard let content = result.choices?.first?.message?.content,
               !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            log(success: false, status: 200, response: APILog.bodyPreview(data) ?? "Keine Antwort im Body")
             throw LLMError.noContent
         }
 
-        return content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        log(success: true, status: 200, response: trimmed)
+        return trimmed
     }
 
     private static func openAIErrorMessage(from data: Data) -> String? {

@@ -24,6 +24,7 @@ final class TranscriptionWorkflow: Workflow {
     private let language: String
     private let backend: TranscriptionBackend
     private let localModelName: String
+    private let apiConfiguration: APIConfiguration?
     private var transcriptionTask: Task<Void, Never>?
 
     init(
@@ -31,13 +32,15 @@ final class TranscriptionWorkflow: Workflow {
         customTerms: [String] = [],
         language: String = "de",
         backend: TranscriptionBackend = .remote,
-        localModelName: String = LocalTranscriptionService.recommendedFastModelName
+        localModelName: String = LocalTranscriptionService.recommendedFastModelName,
+        apiConfiguration: APIConfiguration? = nil
     ) {
         self.type = type
         self.customTerms = customTerms
         self.language = language
         self.backend = backend
         self.localModelName = localModelName
+        self.apiConfiguration = apiConfiguration
     }
 
     func start() {
@@ -98,10 +101,14 @@ final class TranscriptionWorkflow: Workflow {
                 let text: String
                 switch backend {
                 case .remote:
+                    guard let apiConfiguration else {
+                        throw TranscriptionError.notConfigured
+                    }
                     text = try await TranscriptionService.transcribe(
                         audioURL: url,
                         customTerms: vocabularyHints,
-                        language: requestLanguage
+                        language: requestLanguage,
+                        config: apiConfiguration
                     )
                 case .local:
                     text = try await LocalTranscriptionService.shared.transcribe(
