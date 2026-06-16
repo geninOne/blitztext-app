@@ -1,0 +1,63 @@
+name: macOS Build & Release
+
+# Builds a universal (Apple Silicon + Intel) macOS app.
+# - On pull requests and pushes to main: build, verify, and upload the app as a
+#   downloadable run artifact (no public release).
+# - On a version tag (v*): additionally publish a GitHub Release with the app
+#   attached for download.
+#
+# Note: this is a native macOS app (SwiftUI/AppKit, CoreML/WhisperKit, Keychain,
+# Accessibility). There is no Windows build target; a Windows version would be a
+# separate, cross-platform implementation.
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: Build universal macOS app
+    runs-on: macos-latest
+    permissions:
+      contents: write   # required to publish a Release on tag pushes
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build universal app (Release, ad-hoc signed)
+        run: bash ./build.sh --release
+
+      - name: Package app as zip
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent Blitztext.app Blitztext-macos-universal.zip
+          ls -lh Blitztext-macos-universal.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blitztext-macos-universal
+          path: Blitztext-macos-universal.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            Blitztext-macos-universal.zip \
+            --title "Blitztext $GITHUB_REF_NAME" \
+            --notes "Universal macOS build (Apple Silicon + Intel), ad-hoc signed (not notarized). First launch: right-click the app and choose Open, or run: xattr -dr com.apple.quarantine /Applications/Blitztext.app"
