@@ -86,6 +86,29 @@ For fully local transcription, install a WhisperKit CoreML model and enable **Si
 
 For a slower, more explicit walkthrough, see [docs/setup.md](docs/setup.md).
 
+## Continuous Builds And Releases
+
+A GitHub Actions workflow ([.github/workflows/macos-release.yml](.github/workflows/macos-release.yml)) builds a universal (Apple Silicon + Intel) macOS app automatically:
+
+- **Pull requests**: the app is built and verified, then uploaded as a downloadable artifact on the workflow run (Actions tab, open the run, see Artifacts). No release is published.
+- **Merge / push to `main`**: a fresh build is published automatically as a **prerelease** tagged `v0.1.<run-number>`, so there is always a current downloadable build under Releases.
+- **Version tag `v*`**: the build is published as a full, official GitHub Release. Use this for deliberate versions:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+All builds are **ad-hoc signed**, not notarized. On first launch, right-click the app and choose Open, or remove the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Blitztext.app
+```
+
+A notarized, Gatekeeper-friendly build would require Developer ID signing credentials stored as repository secrets.
+
+This is a native macOS app (AppKit/SwiftUI, CoreML/WhisperKit, Keychain, Accessibility); there is no Windows build target. Editing files under `.github/workflows/` and pushing them requires a GitHub token with the `workflow` scope.
+
 ## Permissions
 
 Blitztext asks for:
