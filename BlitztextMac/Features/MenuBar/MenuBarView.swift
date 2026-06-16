@@ -223,7 +223,7 @@ struct MenuBarView: View {
             return "\(appState.selectedLocalModelDisplayName) ist noch nicht installiert."
         }
 
-        return "Blitztext nutzt gerade die OpenAI-Transkription."
+        return "Blitztext nutzt gerade die Online-Transkription über \(appState.appSettings.apiProvider.displayName)."
     }
 
     private var accessibilityHintBanner: some View {
@@ -351,7 +351,7 @@ struct MenuBarView: View {
                         Text("Einmal einrichten, dann direkt loslegen.")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.primary)
-                        Text("Eigenen OpenAI API Key eintragen. Danach sprechen und einfügen.")
+                        Text("Eigenen API Key eintragen. Danach sprechen und einfügen.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -363,7 +363,7 @@ struct MenuBarView: View {
                         onboardingInstallCard
                     }
 
-                    onboardingStep(number: "1", title: "OpenAI Key speichern", detail: "Öffne die Einstellungen und trage deinen eigenen OpenAI API Key ein.")
+                    onboardingStep(number: "1", title: "API Key speichern", detail: "Öffne die Einstellungen, wähle deinen Anbieter (OpenAI oder LiteLLM Gateway) und trage deinen API Key ein.")
                     onboardingStep(number: "2", title: "Berechtigungen erlauben", detail: "Mikrofon und Bedienungshilfen für das Einfügen freigeben.")
                     onboardingStep(number: "3", title: "Workflow wählen", detail: "Blitztext oder einen der Verbesserer-Workflows direkt aus der Menüleiste starten.")
                 }

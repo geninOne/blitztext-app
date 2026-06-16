@@ -53,6 +53,109 @@ private struct SectionLabel: View {
     }
 }
 
+// MARK: - Request History
+
+private struct APIHistoryView: View {
+    var body: some View {
+        let store = APILogStore.shared
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                SectionLabel(text: "Verlauf")
+                Spacer()
+                if !store.entries.isEmpty {
+                    Button("Löschen") { store.clear() }
+                        .font(.system(size: 10, weight: .medium))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.blue)
+                }
+            }
+
+            if store.entries.isEmpty {
+                Text("Noch keine Anfragen. Nach dem nächsten Diktat erscheinen hier die letzten Aufrufe mit gesendeter Anfrage und Antwort. Nur lokal, nur für diese Sitzung.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(store.entries) { entry in
+                    APIHistoryRow(entry: entry)
+                }
+            }
+        }
+    }
+}
+
+private struct APIHistoryRow: View {
+    let entry: APILogEntry
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: entry.success ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(entry.success ? .green : .red)
+                Text(entry.task)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text(entry.statusText)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(entry.success ? Color.secondary : Color.red)
+            }
+
+            Text("\(entry.model) · \(entry.host) · \(Self.timeFormatter.string(from: entry.date))")
+                .font(.system(size: 9.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            if expanded {
+                labeled("Gesendet", entry.request)
+                labeled("Antwort", entry.response)
+            } else {
+                Text(entry.response)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button(expanded ? "Weniger" : "Details") {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            }
+            .font(.system(size: 9.5))
+            .buttonStyle(.plain)
+            .foregroundStyle(.blue)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.primary.opacity(0.03))
+        )
+    }
+
+    @ViewBuilder
+    private func labeled(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(value.isEmpty ? "(leer)" : value)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+}
+
 // MARK: - Access Settings (Tab 1: Zugang)
 
 struct AccessSettingsView: View {
@@ -62,12 +165,15 @@ struct AccessSettingsView: View {
 
     private enum FieldFocus {
         case openAIAPIKey
+        case liteLLMAPIKey
     }
 
     @State private var launchAtLoginService = LaunchAtLoginService()
     @State private var currentInstallLocation = BlitztextInstallLocationService.currentInstallLocation
     @State private var openAIAPIKey = ""
     @State private var editingAPIKey = false
+    @State private var liteLLMAPIKey = ""
+    @State private var editingLiteLLMKey = false
     @State private var saved = false
     @State private var saveErrorText: String?
     @State private var installActionErrorText: String?
@@ -113,52 +219,25 @@ struct AccessSettingsView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    SectionLabel(text: "OpenAI API Key")
-                    Spacer()
-                    if appState.hasValue(for: .openAIAPIKey) && !editingAPIKey {
-                        Button("Aendern") { editingAPIKey = true }
-                            .font(.system(size: 10, weight: .medium))
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 10) {
+                SectionLabel(text: "Anbieter")
+
+                Picker("", selection: $appState.appSettings.apiProvider) {
+                    ForEach(APIProvider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
                     }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
 
-                if appState.hasValue(for: .openAIAPIKey) && !editingAPIKey {
-                    HStack(spacing: 6) {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.green.opacity(0.8))
-                        Text(appState.apiKeyDisplayValue(for: .openAIAPIKey))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color(nsColor: .controlBackgroundColor))
-                    )
+                if appState.appSettings.apiProvider == .openAI {
+                    openAIKeySection
                 } else {
-                    HStack(spacing: 8) {
-                        SecureField("sk-...", text: $openAIAPIKey)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 11.5))
-                            .focused($focusedField, equals: .openAIAPIKey)
-
-                        Button("Einfuegen") {
-                            pasteAPIKeyFromClipboard()
-                        }
-                        .buttonStyle(SubtleButtonStyle())
-                    }
+                    liteLLMSection
                 }
-
-                Text("Dein Key bleibt lokal in dieser App. Audio und Text werden direkt an die OpenAI API gesendet.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            APIHistoryView()
 
             VStack(alignment: .leading, spacing: 8) {
                 SectionLabel(text: "Installation")
@@ -359,15 +438,159 @@ struct AccessSettingsView: View {
             launchAtLoginService.refresh()
             refreshInstallState()
             load()
-            if !appState.hasValue(for: .openAIAPIKey) {
+            if appState.appSettings.apiProvider == .openAI, !appState.hasValue(for: .openAIAPIKey) {
                 editingAPIKey = true
                 focusedField = .openAIAPIKey
+            } else if appState.appSettings.apiProvider == .liteLLM, !appState.hasValue(for: .liteLLMAPIKey) {
+                editingLiteLLMKey = true
+                focusedField = .liteLLMAPIKey
             }
+        }
+    }
+
+    // MARK: - Provider Sections
+
+    @ViewBuilder
+    private var openAIKeySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                SectionLabel(text: "OpenAI API Key")
+                Spacer()
+                if appState.hasValue(for: .openAIAPIKey) && !editingAPIKey {
+                    Button("Aendern") { editingAPIKey = true }
+                        .font(.system(size: 10, weight: .medium))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.blue)
+                }
+            }
+
+            if appState.hasValue(for: .openAIAPIKey) && !editingAPIKey {
+                maskedKeyRow(for: .openAIAPIKey)
+            } else {
+                HStack(spacing: 8) {
+                    SecureField("sk-...", text: $openAIAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11.5))
+                        .focused($focusedField, equals: .openAIAPIKey)
+
+                    Button("Einfuegen") {
+                        pasteAPIKeyFromClipboard()
+                    }
+                    .buttonStyle(SubtleButtonStyle())
+                }
+            }
+
+            Text("Dein Key bleibt lokal in dieser App. Audio und Text werden direkt an die OpenAI API gesendet.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var liteLLMSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                SectionLabel(text: "Gateway-URL")
+                TextField("http://host:4000", text: $appState.appSettings.liteLLMBaseURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11.5))
+                    .autocorrectionDisabled(true)
+                Text("Basis-URL deines LiteLLM-Proxys, ohne /v1.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    SectionLabel(text: "LiteLLM API Key")
+                    Spacer()
+                    if appState.hasValue(for: .liteLLMAPIKey) && !editingLiteLLMKey {
+                        Button("Aendern") { editingLiteLLMKey = true }
+                            .font(.system(size: 10, weight: .medium))
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.blue)
+                    }
+                }
+
+                if appState.hasValue(for: .liteLLMAPIKey) && !editingLiteLLMKey {
+                    maskedKeyRow(for: .liteLLMAPIKey)
+                } else {
+                    HStack(spacing: 8) {
+                        SecureField("sk-...", text: $liteLLMAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11.5))
+                            .focused($focusedField, equals: .liteLLMAPIKey)
+
+                        Button("Einfuegen") {
+                            pasteLiteLLMKeyFromClipboard()
+                        }
+                        .buttonStyle(SubtleButtonStyle())
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                SectionLabel(text: "Modelle")
+                modelField(
+                    title: "Text verbessern",
+                    text: $appState.appSettings.liteLLMFastModel,
+                    placeholder: "z. B. gpt-5.5-mini"
+                )
+                modelField(
+                    title: "Dampf ablassen",
+                    text: $appState.appSettings.liteLLMStrongModel,
+                    placeholder: "z. B. gpt-5.5"
+                )
+                modelField(
+                    title: "Transkription",
+                    text: $appState.appSettings.liteLLMTranscriptionModel,
+                    placeholder: "z. B. whisper-1"
+                )
+            }
+
+            Text("Key und URL bleiben lokal. Audio und Text gehen an dein Gateway. Die Modellnamen müssen exakt denen in deiner LiteLLM-Config entsprechen.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func maskedKeyRow(for key: KeychainKey) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.green.opacity(0.8))
+            Text(appState.apiKeyDisplayValue(for: key))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+    }
+
+    @ViewBuilder
+    private func modelField(title: String, text: Binding<String>, placeholder: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 110, alignment: .leading)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11.5))
+                .autocorrectionDisabled(true)
         }
     }
 
     private func load() {
         openAIAPIKey = ""
+        liteLLMAPIKey = ""
     }
 
     private func save() {
@@ -375,27 +598,56 @@ struct AccessSettingsView: View {
         cleanupStatusText = nil
         cleanupErrorText = nil
         KeychainService.invalidateCache()
-        let trimmedAPIKey = openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if editingAPIKey || !appState.hasValue(for: .openAIAPIKey) {
-            guard !trimmedAPIKey.isEmpty else {
-                saveErrorText = "Bitte trage deinen OpenAI API Key ein."
+        switch appState.appSettings.apiProvider {
+        case .openAI:
+            let trimmedAPIKey = openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if editingAPIKey || !appState.hasValue(for: .openAIAPIKey) {
+                guard !trimmedAPIKey.isEmpty else {
+                    saveErrorText = "Bitte trage deinen OpenAI API Key ein."
+                    return
+                }
+                do {
+                    try KeychainService.save(key: .openAIAPIKey, value: trimmedAPIKey)
+                    openAIAPIKey = ""
+                    editingAPIKey = false
+                } catch {
+                    saveErrorText = "OpenAI API Key konnte nicht gespeichert werden."
+                    return
+                }
+            }
+            KeychainService.invalidateCache()
+            if !appState.hasValue(for: .openAIAPIKey) {
+                saveErrorText = "OpenAI API Key wurde nicht persistent gespeichert. Bitte App neu starten und erneut versuchen."
                 return
             }
-            do {
-                try KeychainService.save(key: .openAIAPIKey, value: trimmedAPIKey)
-                openAIAPIKey = ""
-                editingAPIKey = false
-            } catch {
-                saveErrorText = "OpenAI API Key konnte nicht gespeichert werden."
+
+        case .liteLLM:
+            let trimmedURL = appState.appSettings.liteLLMBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard APIConfiguration.normalizedBaseURL(trimmedURL) != nil else {
+                saveErrorText = "Bitte trage eine gültige Gateway-URL ein, inklusive http:// oder https://."
                 return
             }
-        }
-
-        KeychainService.invalidateCache()
-        if !appState.hasValue(for: .openAIAPIKey) {
-            saveErrorText = "OpenAI API Key wurde nicht persistent gespeichert. Bitte App neu starten und erneut versuchen."
-            return
+            let trimmedKey = liteLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if editingLiteLLMKey || !appState.hasValue(for: .liteLLMAPIKey) {
+                guard !trimmedKey.isEmpty else {
+                    saveErrorText = "Bitte trage deinen LiteLLM API Key ein."
+                    return
+                }
+                do {
+                    try KeychainService.save(key: .liteLLMAPIKey, value: trimmedKey)
+                    liteLLMAPIKey = ""
+                    editingLiteLLMKey = false
+                } catch {
+                    saveErrorText = "LiteLLM API Key konnte nicht gespeichert werden."
+                    return
+                }
+            }
+            KeychainService.invalidateCache()
+            if !appState.hasValue(for: .liteLLMAPIKey) {
+                saveErrorText = "LiteLLM API Key wurde nicht persistent gespeichert. Bitte App neu starten und erneut versuchen."
+                return
+            }
         }
 
         withAnimation(.easeInOut(duration: 0.2)) { saved = true }
@@ -418,6 +670,24 @@ struct AccessSettingsView: View {
         }
 
         openAIAPIKey = trimmedKey
+        NSPasteboard.general.clearContents()
+        saveErrorText = nil
+    }
+
+    private func pasteLiteLLMKeyFromClipboard() {
+        guard let rawText = NSPasteboard.general.string(forType: .string) else {
+            saveErrorText = "Zwischenablage enthält keinen Text."
+            return
+        }
+
+        let firstLine = rawText.components(separatedBy: .newlines).first ?? rawText
+        let trimmedKey = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedKey.count >= 8 else {
+            saveErrorText = "Zwischenablage enthält keinen plausiblen API Key."
+            return
+        }
+
+        liteLLMAPIKey = trimmedKey
         NSPasteboard.general.clearContents()
         saveErrorText = nil
     }
@@ -480,7 +750,9 @@ struct AccessSettingsView: View {
 
         if deleteLocalDataOnCleanup {
             openAIAPIKey = ""
+            liteLLMAPIKey = ""
             editingAPIKey = true
+            editingLiteLLMKey = true
         }
 
         if report.failedItems.isEmpty {
