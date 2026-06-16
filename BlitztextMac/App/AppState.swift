@@ -59,8 +59,20 @@ final class AppState {
     let hotkeyService = HotkeyService()
 
     // Computed
+
+    /// The resolved remote configuration for the currently selected provider,
+    /// or `nil` if that provider is not fully configured yet.
+    var activeAPIConfiguration: APIConfiguration? {
+        APIConfiguration.resolve(settings: appSettings)
+    }
+
+    /// Whether the selected remote provider (OpenAI or LiteLLM) is ready to use.
+    var remoteProviderConfigured: Bool {
+        activeAPIConfiguration != nil
+    }
+
     var isConfigured: Bool {
-        KeychainService.isConfigured || !LocalTranscriptionService.installedModels().isEmpty
+        remoteProviderConfigured || !LocalTranscriptionService.installedModels().isEmpty
     }
     var shouldShowOnboarding: Bool {
         !isConfigured && !appSettings.hasSeenOnboarding
@@ -108,7 +120,7 @@ final class AppState {
                     ? "Lokal: \(LocalTranscriptionModel.displayName(for: modelName))."
                     : "Lokales WhisperKit-Modell fehlt."
             }
-            return "Online: Whisper über OpenAI."
+            return "Online: Transkription über \(appSettings.apiProvider.displayName)."
         case .localTranscription:
             return "Nur lokal. Kein Server."
         case .textImprover, .dampfAblassen, .emojiText:
@@ -161,13 +173,16 @@ final class AppState {
         activeLaunchSource = source
         activePasteTarget = capturePasteTarget(for: source)
 
+        let apiConfiguration = activeAPIConfiguration
+
         switch type {
         case .transcription:
             let workflow = TranscriptionWorkflow(
                 customTerms: textImprovementSettings.customTerms,
                 language: transcriptionSettings.language,
                 backend: appSettings.secureLocalModeEnabled ? .local : .remote,
-                localModelName: selectedLocalModelName
+                localModelName: selectedLocalModelName,
+                apiConfiguration: apiConfiguration
             )
             configureWorkflowHandlers(workflow)
             activeWorkflow = workflow
@@ -186,29 +201,35 @@ final class AppState {
             workflow.start()
 
         case .textImprover:
+            guard let apiConfiguration else { page = .settings; return }
             let workflow = TextImprovementWorkflow(
                 settings: textImprovementSettings,
-                language: transcriptionSettings.language
+                language: transcriptionSettings.language,
+                apiConfiguration: apiConfiguration
             )
             configureWorkflowHandlers(workflow)
             activeWorkflow = workflow
             workflow.start()
 
         case .dampfAblassen:
+            guard let apiConfiguration else { page = .settings; return }
             let workflow = DampfAblassenWorkflow(
                 settings: dampfAblassenSettings,
                 customTerms: textImprovementSettings.customTerms,
-                language: transcriptionSettings.language
+                language: transcriptionSettings.language,
+                apiConfiguration: apiConfiguration
             )
             configureWorkflowHandlers(workflow)
             activeWorkflow = workflow
             workflow.start()
 
         case .emojiText:
+            guard let apiConfiguration else { page = .settings; return }
             let workflow = EmojiTextWorkflow(
                 settings: emojiTextSettings,
                 customTerms: textImprovementSettings.customTerms,
-                language: transcriptionSettings.language
+                language: transcriptionSettings.language,
+                apiConfiguration: apiConfiguration
             )
             configureWorkflowHandlers(workflow)
             activeWorkflow = workflow
@@ -225,9 +246,9 @@ final class AppState {
         case .transcription:
             return appSettings.secureLocalModeEnabled
                 ? selectedLocalModelIsInstalled
-                : KeychainService.isConfigured
+                : remoteProviderConfigured
         case .textImprover, .dampfAblassen, .emojiText:
-            return !appSettings.secureLocalModeEnabled && KeychainService.isConfigured
+            return !appSettings.secureLocalModeEnabled && remoteProviderConfigured
         }
     }
 

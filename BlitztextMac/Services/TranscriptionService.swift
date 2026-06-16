@@ -11,11 +11,11 @@ enum TranscriptionError: LocalizedError {
         case .noFile:
             return "Keine Audio-Datei gefunden"
         case .notConfigured:
-            return "OpenAI API Key fehlt. Bitte in den Einstellungen hinterlegen."
+            return "API Key fehlt. Bitte in den Einstellungen hinterlegen."
         case .networkError(let msg):
             return "Netzwerkfehler: \(msg)"
         case .apiError(let msg):
-            return "OpenAI-Fehler: \(msg)"
+            return "Server-Fehler: \(msg)"
         }
     }
 }
@@ -29,9 +29,6 @@ private struct TranscriptionOpenAIErrorResponse: Decodable {
 }
 
 enum TranscriptionService {
-    private static let remoteModel = "whisper-1"
-    private static let transcriptionsURL = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
-
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.waitsForConnectivity = false
@@ -44,11 +41,12 @@ enum TranscriptionService {
     static func transcribe(
         audioURL: URL,
         customTerms: [String] = [],
-        language: String? = nil
+        language: String? = nil,
+        config: APIConfiguration
     ) async throws -> String {
-        guard let apiKey = KeychainService.load(key: .openAIAPIKey) else {
-            throw TranscriptionError.notConfigured
-        }
+        let apiKey = config.apiKey
+        let transcriptionsURL = config.transcriptionsURL
+        let remoteModel = config.transcriptionModel
 
         return try await Task.detached(priority: .userInitiated) {
             defer {
@@ -101,24 +99,71 @@ enum TranscriptionService {
             body.append("--\(boundary)--\r\n")
             request.httpBody = body
 
-            let (data, response) = try await session.data(for: request)
+            let lang = (language?.trimmingCharacters(in: .whitespacesAndNewlines))
+                .flatMap { $0.isEmpty ? nil : $0 } ?? "auto"
+            let requestSummary = "Audio · Modell \(remoteModel) · Sprache \(lang)"
+            func log(success: Bool, status: Int?, response: String) {
+                APILog.record(
+                    task: "Transkription",
+                    model: remoteModel,
+                    endpoint: transcriptionsURL,
+                    success: success,
+                    status: status,
+                    request: requestSummary,
+                    response: response
+                )
+            }
+
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                log(success: false, status: nil, response: "Netzwerkfehler: \(error.localizedDescription)")
+                throw error
+            }
 
             guard let httpResponse = response as? HTTPURLResponse else {
+                log(success: false, status: nil, response: "Ungueltige Antwort")
                 throw TranscriptionError.networkError("Ungueltige Antwort")
             }
 
             guard httpResponse.statusCode == 200 else {
+                let detail = openAIErrorMessage(from: data) ?? APILog.bodyPreview(data) ?? "Status \(httpResponse.statusCode)"
+                log(success: false, status: httpResponse.statusCode, response: detail)
                 throw TranscriptionError.apiError(openAIErrorMessage(from: data) ?? "Status \(httpResponse.statusCode)")
             }
 
-            guard let text = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !text.isEmpty else {
+            let rawBody = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            // LiteLLM and some other OpenAI-compatible gateways return a JSON
+            // object ({"text": "..."}) even when response_format=text is
+            // requested. Prefer the JSON `text` field; fall back to the raw
+            // body for endpoints that honour plain-text responses.
+            let transcript = transcriptText(fromJSON: data) ?? rawBody
+
+            guard !transcript.isEmpty else {
+                log(success: false, status: 200, response: "Leere Transkription")
                 throw TranscriptionError.apiError("Transkription fehlgeschlagen")
             }
 
-            return text
+            log(success: true, status: 200, response: transcript)
+            return transcript
         }.value
+    }
+
+    private struct TranscriptionTextResponse: Decodable {
+        let text: String?
+    }
+
+    private static func transcriptText(fromJSON data: Data) -> String? {
+        guard let decoded = try? JSONDecoder().decode(TranscriptionTextResponse.self, from: data),
+              let text = decoded.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            return nil
+        }
+        return text
     }
 
     private static func openAIErrorMessage(from data: Data) -> String? {

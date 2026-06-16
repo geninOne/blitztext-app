@@ -16,12 +16,14 @@ final class DampfAblassenWorkflow: Workflow {
     private let settings: DampfAblassenSettings
     private let customTerms: [String]
     private let language: String
+    private let apiConfiguration: APIConfiguration
     private var processingTask: Task<Void, Never>?
 
-    init(settings: DampfAblassenSettings, customTerms: [String] = [], language: String = "de") {
+    init(settings: DampfAblassenSettings, customTerms: [String] = [], language: String = "de", apiConfiguration: APIConfiguration) {
         self.settings = settings
         self.customTerms = customTerms
         self.language = language
+        self.apiConfiguration = apiConfiguration
     }
 
     // MARK: - Recording State
@@ -86,7 +88,8 @@ final class DampfAblassenWorkflow: Workflow {
                 let rawText = try await TranscriptionService.transcribe(
                     audioURL: url,
                     customTerms: vocabularyHints,
-                    language: language
+                    language: language,
+                    config: apiConfiguration
                 )
                 let cleanedRawText = TranscriptionQualityService.cleanedTranscript(rawText)
                 guard !TranscriptionQualityService.isLikelyArtifact(cleanedRawText, recordingDuration: recordingDuration) else {
@@ -101,7 +104,8 @@ final class DampfAblassenWorkflow: Workflow {
 
                 let answer = try await LLMService.dampfAblassen(
                     text: cleanedRawText,
-                    systemPrompt: settings.systemPrompt
+                    systemPrompt: settings.systemPrompt,
+                    config: apiConfiguration
                 )
                 let cleanedAnswer = TranscriptionQualityService.cleanedTranscript(answer)
                 guard cleanedAnswer != "KEINE_AUFNAHME_ERKANNT" else {
