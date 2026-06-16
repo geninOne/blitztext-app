@@ -182,7 +182,7 @@ enum LLMService {
             result = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
         } catch {
             log(success: false, status: 200, response: APILog.bodyPreview(data) ?? "Antwort nicht lesbar")
-            throw LLMError.noContent
+            throw LLMError.apiError("Antwort konnte nicht gelesen werden.")
         }
 
         guard let content = result.choices?.first?.message?.content,
