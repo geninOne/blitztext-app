@@ -30,3 +30,7 @@ Secrets.swift
 
 # Tooling
 node_modules/
+
+# IDEs
+.idea/
+.vscode/
