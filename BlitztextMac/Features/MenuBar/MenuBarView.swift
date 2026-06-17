@@ -733,9 +733,7 @@ struct TextImproverActiveView: View {
                 } else {
                     VStack(spacing: 12) {
                         Spacer().frame(height: 24)
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .controlSize(.small)
+                        BlitzSpinner()
                         if case .running(let msg) = workflow.phase {
                             Text(msg)
                                 .font(.system(size: 11.5))
@@ -806,9 +804,7 @@ struct DampfAblassenActiveView: View {
                 } else {
                     VStack(spacing: 12) {
                         Spacer().frame(height: 24)
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .controlSize(.small)
+                        BlitzSpinner()
                         if case .running(let msg) = workflow.phase {
                             Text(msg)
                                 .font(.system(size: 11.5))
@@ -879,9 +875,7 @@ struct EmojiTextActiveView: View {
                 } else {
                     VStack(spacing: 12) {
                         Spacer().frame(height: 24)
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .controlSize(.small)
+                        BlitzSpinner()
                         if case .running(let msg) = workflow.phase {
                             Text(msg)
                                 .font(.system(size: 11.5))
@@ -940,12 +934,33 @@ struct EmojiTextActiveView: View {
 
 // MARK: - Shared Result / Error Views
 
+/// A lightweight, SwiftUI-drawn indeterminate spinner used instead of
+/// `ProgressView()`. SwiftUI's indeterminate `ProgressView` bridges to
+/// `NSProgressIndicator`, which can crash inside CoreUI
+/// (`-[CUIStructuredThemeStore lookupAssetForKey:]`, EXC_BAD_ACCESS) while
+/// rendering the spinner layer on some Intel Macs. Drawing the spinner with a
+/// plain `Shape` keeps us off that code path entirely.
+private struct BlitzSpinner: View {
+    var size: CGFloat = 14
+    var lineWidth: CGFloat = 2
+    @State private var spinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.72)
+            .stroke(Color.secondary, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .animation(.linear(duration: 0.85).repeatForever(autoreverses: false), value: spinning)
+            .onAppear { spinning = true }
+            .accessibilityLabel("Wird verarbeitet")
+    }
+}
+
 private func processingView(message: String) -> some View {
     VStack(spacing: 12) {
         Spacer().frame(height: 24)
-        ProgressView()
-            .scaleEffect(0.7)
-            .controlSize(.small)
+        BlitzSpinner()
         Text(message)
             .font(.system(size: 11.5))
             .foregroundStyle(.secondary)
