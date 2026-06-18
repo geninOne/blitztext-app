@@ -12,6 +12,11 @@ name: macOS Build & Release
 
 on:
   pull_request:
+    paths:
+      - 'BlitztextMac/**'
+      - 'build.sh'
+      - 'shared/**'
+      - '.github/workflows/macos-release.yml'
   push:
     branches: [ main ]
     tags: [ 'v*' ]
@@ -75,7 +80,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The Windows job may publish the same tag's release first, so fall
+          # back to uploading into the existing release.
           gh release create "$GITHUB_REF_NAME" \
             Blitztext-macos-universal.zip \
             --title "Blitztext $GITHUB_REF_NAME" \
-            --notes "Universal macOS build (Apple Silicon + Intel), ad-hoc signed (not notarized). First launch: right-click the app and choose Open, or run: xattr -dr com.apple.quarantine /Applications/Blitztext.app"
+            --notes "Universal macOS build (Apple Silicon + Intel), ad-hoc signed (not notarized). First launch: right-click the app and choose Open, or run: xattr -dr com.apple.quarantine /Applications/Blitztext.app" \
+          || gh release upload "$GITHUB_REF_NAME" Blitztext-macos-universal.zip --clobber

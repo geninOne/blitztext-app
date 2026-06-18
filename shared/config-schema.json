@@ -1,0 +1,35 @@
+{
+  "_note": "Provider/model configuration shape, shared by both apps. The API key is never stored here; it lives in the OS secret store (macOS Keychain / Windows Credential Manager via safeStorage or keyring).",
+
+  "apiProvider": {
+    "type": "enum",
+    "values": ["openAI", "liteLLM"],
+    "default": "liteLLM",
+    "description": "Which remote backend to use. openAI talks to api.openai.com with fixed models; liteLLM talks to the configured gateway."
+  },
+
+  "openAI": {
+    "baseURL": "https://api.openai.com",
+    "fastModel": "gpt-4o-mini",
+    "strongModel": "gpt-4o",
+    "transcriptionModel": "whisper-1",
+    "sendsTemperature": true,
+    "_note": "Fixed for the openAI provider; models are not user-editable there."
+  },
+
+  "liteLLM": {
+    "baseURL": {
+      "type": "string",
+      "example": "http://ai-gateway.intra.evia.de:4000",
+      "description": "Gateway base URL WITHOUT the /v1 suffix. http and https are both allowed."
+    },
+    "apiKey": {
+      "type": "secret",
+      "storage": "OS secret store, not in settings file"
+    },
+    "fastModel": { "type": "string", "example": "gpt-4o-mini" },
+    "strongModel": { "type": "string", "example": "gpt-5.5" },
+    "transcriptionModel": { "type": "string", "example": "gpt-4o-transcribe" },
+    "sendsTemperature": false
+  }
+}
