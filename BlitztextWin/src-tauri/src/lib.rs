@@ -31,13 +31,20 @@ fn litellm_key() -> Result<String, String> {
         .ok_or_else(|| "Kein API-Key gespeichert.".to_string())
 }
 
-/// Trims a trailing slash and a trailing `/v1` so we can append the API paths
-/// ourselves.
+/// Normalizes a user-entered gateway URL to the bare base, so we can append the
+/// API paths ourselves. Strips a trailing slash and any trailing `/v1` or `/ui`
+/// segments (in any order) — people often paste the LiteLLM web UI URL
+/// (".../ui") or an OpenAI-style ".../v1" base.
 fn normalize_base(base: &str) -> String {
     let mut value = base.trim().trim_end_matches('/').to_string();
-    if value.to_lowercase().ends_with("/v1") {
-        value.truncate(value.len() - 3);
-        value = value.trim_end_matches('/').to_string();
+    loop {
+        let lower = value.to_lowercase();
+        if lower.ends_with("/v1") || lower.ends_with("/ui") {
+            value.truncate(value.len() - 3);
+            value = value.trim_end_matches('/').to_string();
+        } else {
+            break;
+        }
     }
     value
 }
