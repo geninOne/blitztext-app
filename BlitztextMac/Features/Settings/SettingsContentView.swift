@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 
 struct SettingsContentView: View {
     @Bindable var appState: AppState
@@ -7,19 +8,23 @@ struct SettingsContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Two-tab segmented picker
+            // Three-tab segmented picker
             Picker("", selection: $selectedTab) {
                 Text("Anpassen").tag(0)
                 Text("Zugang").tag(1)
+                Text("Verlauf").tag(2)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
             ScrollView {
-                if selectedTab == 0 {
+                switch selectedTab {
+                case 0:
                     CustomizeSettingsView(appState: appState)
-                } else {
+                case 2:
+                    DictationHistoryView()
+                default:
                     AccessSettingsView(appState: appState)
                 }
             }
@@ -53,79 +58,121 @@ private struct SectionLabel: View {
     }
 }
 
-// MARK: - Request History
+// MARK: - Dictation History (Verlauf, debug)
 
-private struct APIHistoryView: View {
-    var body: some View {
-        let store = APILogStore.shared
+/// Plays back history recordings, one at a time. AVAudioPlayer handles the m4a
+/// recordings the workflows produce.
+@MainActor
+@Observable
+final class HistoryAudioPlayer: NSObject, AVAudioPlayerDelegate {
+    static let shared = HistoryAudioPlayer()
+    var playingID: UUID?
+    private var player: AVAudioPlayer?
 
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                SectionLabel(text: "Verlauf")
-                Spacer()
-                if !store.entries.isEmpty {
-                    Button("Löschen") { store.clear() }
-                        .font(.system(size: 10, weight: .medium))
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.blue)
-                }
-            }
-
-            if store.entries.isEmpty {
-                Text("Noch keine Anfragen. Nach dem nächsten Diktat erscheinen hier die letzten Aufrufe mit gesendeter Anfrage und Antwort. Nur lokal, nur für diese Sitzung.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ForEach(store.entries) { entry in
-                    APIHistoryRow(entry: entry)
-                }
-            }
+    func toggle(_ entry: DictationHistoryEntry) {
+        if playingID == entry.id {
+            stop()
+            return
         }
+        guard let url = entry.audioURL else { return }
+        do {
+            let newPlayer = try AVAudioPlayer(contentsOf: url)
+            newPlayer.delegate = self
+            newPlayer.play()
+            player = newPlayer
+            playingID = entry.id
+        } catch {
+            playingID = nil
+        }
+    }
+
+    func stop() {
+        player?.stop()
+        player = nil
+        playingID = nil
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in self.stop() }
     }
 }
 
-private struct APIHistoryRow: View {
-    let entry: APILogEntry
-    @State private var expanded = false
+private struct DictationHistoryView: View {
+    private let store = DictationHistoryStore.shared
+    private let audio = HistoryAudioPlayer.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: entry.success ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(entry.success ? .green : .red)
-                Text(entry.task)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.primary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                SectionLabel(text: "Verlauf · letzte 10")
                 Spacer()
-                Text(entry.statusText)
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundStyle(entry.success ? Color.secondary : Color.red)
+                if !store.entries.isEmpty {
+                    Button("Löschen") {
+                        audio.stop()
+                        store.clear()
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                }
             }
 
-            Text("\(entry.model) · \(entry.host) · \(Self.timeFormatter.string(from: entry.date))")
-                .font(.system(size: 9.5))
+            Text("Nur diese Sitzung, nur zum Debuggen: Aufnahme anhören und prüfen, ob richtig erkannt wurde.")
+                .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
 
-            if expanded {
-                labeled("Gesendet", entry.request)
-                labeled("Antwort", entry.response)
-            } else {
-                Text(entry.response)
-                    .font(.system(size: 10, design: .monospaced))
+            if store.entries.isEmpty {
+                Text("Noch keine Aufnahmen in dieser Sitzung.")
+                    .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
+            } else {
+                ForEach(store.entries) { entry in
+                    DictationHistoryRow(entry: entry, audio: audio)
+                }
+            }
+        }
+        .padding(16)
+    }
+}
+
+private struct DictationHistoryRow: View {
+    let entry: DictationHistoryEntry
+    let audio: HistoryAudioPlayer
+
+    private var isPlaying: Bool { audio.playingID == entry.id }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if entry.audioURL != nil {
+                    Button {
+                        audio.toggle(entry)
+                    } label: {
+                        Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Image(systemName: "speaker.slash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                        .help("Keine Audiodatei gespeichert")
+                }
+                Text(entry.workflow.displayName)
+                    .font(.system(size: 11.5, weight: .semibold))
+                Spacer()
+                Text(Self.timeFormatter.string(from: entry.date))
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
 
-            Button(expanded ? "Weniger" : "Details") {
-                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            labeled("Eingabe (erkannt)", entry.input)
+            if entry.output != entry.input {
+                labeled("Ausgabe (eingefügt)", entry.output)
             }
-            .font(.system(size: 9.5))
-            .buttonStyle(.plain)
-            .foregroundStyle(.blue)
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -142,7 +189,7 @@ private struct APIHistoryRow: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(value.isEmpty ? "(leer)" : value)
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 11))
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -236,8 +283,6 @@ struct AccessSettingsView: View {
                     liteLLMSection
                 }
             }
-
-            APIHistoryView()
 
             VStack(alignment: .leading, spacing: 8) {
                 SectionLabel(text: "Installation")

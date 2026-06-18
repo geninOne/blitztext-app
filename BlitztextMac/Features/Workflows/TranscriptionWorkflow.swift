@@ -134,6 +134,7 @@ final class TranscriptionWorkflow: Workflow {
                 )
                 phase = .done(cleaned)
                 onOutput?(cleaned)
+                recordDictationHistory(workflow: type, audioURL: url, input: cleaned, output: cleaned)
             } catch {
                 transcriptionLogger.error(
                     "Transcription failed after \(elapsedMilliseconds(since: stopTime)) ms: \(error.localizedDescription, privacy: .private)"

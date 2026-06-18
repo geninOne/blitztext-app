@@ -635,8 +635,17 @@ struct MenuBarView: View {
             .buttonStyle(SubtleButtonStyle())
             Spacer()
         }
+        .overlay(alignment: .trailing) {
+            Text("v\(Self.appVersion)")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.quaternary)
+                .padding(.trailing, 12)
+        }
         .padding(.vertical, 8)
     }
+
+    private static let appVersion: String =
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
 
     private func workflowIconColor(_ type: WorkflowType) -> Color {
         switch type {
