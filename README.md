@@ -1,6 +1,11 @@
 # Blitztext App
 
-Blitztext App is an experimental open-source macOS menubar app for turning speech into text.
+Blitztext App is an experimental open-source app for turning speech into text. The repository holds two apps:
+
+- **macOS** — a native SwiftUI/AppKit menubar app (`BlitztextMac/`). The rest of this README is mostly about it.
+- **Windows** — a cross-platform Tauri (Rust + TypeScript) companion app (`BlitztextWin/`), preview/work-in-progress. See [BlitztextWin/README.md](BlitztextWin/README.md).
+
+The two apps don't share a codebase (native Swift vs. the Windows stack); only a small logic layer is shared in [`shared/`](shared/) (prompts, gateway contract, config schema).
 
 It is intentionally small and unfinished. The goal is to make a real workflow visible and hackable: press a hotkey, speak, get text back, optionally rewrite it, and paste it into the app you were using.
 
@@ -17,8 +22,8 @@ This is a learning and experimentation project, not a polished product.
 
 ## Important Preview Notes
 
-- macOS only.
-- Bring your own OpenAI API key.
+- The macOS app (below) is the more complete one; the Windows app is an earlier preview — see [BlitztextWin/README.md](BlitztextWin/README.md).
+- Bring your own OpenAI API key (macOS) or LiteLLM gateway URL + key (Windows).
 - No hosted Blitztext backend is included or provided.
 - In online mode, audio and text are sent directly from the app to the OpenAI API.
 - Optional local transcription via WhisperKit/CoreML if you install a compatible model locally.
@@ -88,10 +93,15 @@ For a slower, more explicit walkthrough, see [docs/setup.md](docs/setup.md).
 
 ## Continuous Builds And Releases
 
-A GitHub Actions workflow ([.github/workflows/macos-release.yml](.github/workflows/macos-release.yml)) builds a universal (Apple Silicon + Intel) macOS app automatically:
+Each app has its own GitHub Actions workflow, and they only run when their own files change (`paths` filters):
+
+- macOS: [.github/workflows/macos-release.yml](.github/workflows/macos-release.yml) — universal (Apple Silicon + Intel) `.app`.
+- Windows: [.github/workflows/windows-release.yml](.github/workflows/windows-release.yml) — NSIS `.exe` + MSI installers built on a Windows runner.
+
+The macOS workflow builds automatically:
 
 - **Pull requests**: the app is built and verified, then uploaded as a downloadable artifact on the workflow run (Actions tab, open the run, see Artifacts). No release is published.
-- **Merge / push to `main`**: a fresh build is published automatically as a **prerelease** tagged `v0.1.<run-number>`, so there is always a current downloadable build under Releases.
+- **Merge / push to `main`**: a fresh build is published automatically as a **prerelease**, so there is always a current downloadable build under Releases.
 - **Version tag `v*`**: the build is published as a full, official GitHub Release. Use this for deliberate versions:
 
 ```bash
@@ -107,7 +117,9 @@ xattr -dr com.apple.quarantine /Applications/Blitztext.app
 
 A notarized, Gatekeeper-friendly build would require Developer ID signing credentials stored as repository secrets.
 
-This is a native macOS app (AppKit/SwiftUI, CoreML/WhisperKit, Keychain, Accessibility); there is no Windows build target. Editing files under `.github/workflows/` and pushing them requires a GitHub token with the `workflow` scope.
+The Windows workflow follows the same pattern: artifacts on pull requests, a prerelease on pushes to `main`, and installers attached to a `v*` release. Both apps' artifacts are published to the **same** GitHub Release for a given push or tag. Windows installers are currently unsigned (Windows SmartScreen may warn on first launch); Authenticode signing would likewise need credentials in repository secrets.
+
+Editing files under `.github/workflows/` and pushing them requires a GitHub token with the `workflow` scope.
 
 ## Permissions
 
@@ -137,13 +149,16 @@ Read [docs/privacy.md](docs/privacy.md) before using the preview with sensitive 
 ## Project Structure
 
 ```text
-BlitztextMac/
-  App/          App lifecycle and paste handling
-  Features/     Workflows, menu bar UI, settings
-  Services/     Recording, OpenAI calls, hotkeys, local storage
-  Views/        Shared SwiftUI views
-build.sh        Local build script
-docs/           Setup, privacy, roadmap, preflight, landing page notes
+BlitztextMac/     Native macOS app (SwiftUI/AppKit)
+  App/            App lifecycle and paste handling
+  Features/       Workflows, menu bar UI, settings
+  Services/       Recording, OpenAI calls, hotkeys, local storage
+  Views/          Shared SwiftUI views
+BlitztextWin/     Windows app (Tauri v2: Rust core + TypeScript UI)
+shared/           Single source shared by both apps: prompts, gateway
+                  contract, config schema
+build.sh          Local macOS build script
+docs/             Setup, privacy, roadmap, preflight, landing page notes
 ```
 
 ## Local Models
