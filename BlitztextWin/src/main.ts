@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
   defaultSettings,
   loadSettings,
@@ -70,5 +71,34 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     saveStatus.textContent = "Gespeichert";
     setTimeout(() => (saveStatus.textContent = ""), 2000);
+  });
+
+  const testResult = el("test-result");
+  el<HTMLButtonElement>("test-btn").addEventListener("click", async () => {
+    testResult.textContent = "Teste Verbindung ...";
+
+    // Save a freshly typed key first, so "enter key + test" works in one step.
+    const key = apiKey.value.trim();
+    if (key) {
+      try {
+        await setSecret(LITELLM_KEY_ACCOUNT, key);
+        apiKey.value = "";
+        keyStatus.textContent = "Key gespeichert";
+      } catch (error) {
+        testResult.textContent = `Key-Fehler: ${error}`;
+        return;
+      }
+    }
+
+    try {
+      const models = await invoke<string[]>("gateway_test", {
+        baseUrl: baseURL.value.trim(),
+      });
+      testResult.textContent = models.length
+        ? `OK, ${models.length} Modelle: ${models.slice(0, 8).join(", ")}${models.length > 8 ? " ..." : ""}`
+        : "Verbunden, aber keine Modelle gelistet.";
+    } catch (error) {
+      testResult.textContent = `Fehler: ${error}`;
+    }
   });
 });
