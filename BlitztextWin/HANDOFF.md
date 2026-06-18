@@ -214,7 +214,9 @@ M1 (online-only):
 - Hotkey capture vs. an active global shortcut: while recording a new combo, the
   OS may swallow the keystroke if it equals a registered hotkey. Acceptable for
   now; could unregister during capture.
-- Verlauf / request-history tab (Mac has it; needs request logging).
+- ✅ Verlauf tab (3rd tab): session-only, in-memory debug history of the last
+  10 dictations — plays the recorded WAV (data URL) and shows input (recognized)
+  + output (pasted, only when a rewrite changed it). Not persisted; capped at 10.
 - OpenAI direct provider is not wired in Rust yet (gateway is the supported
   path); the OpenAI key field stores a secret but requests still target liteLLM.
 - Window naming/product polish ("blitztextwin").
