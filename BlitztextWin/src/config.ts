@@ -10,6 +10,12 @@ export interface Settings {
     strongModel: string;
     transcriptionModel: string;
   };
+  // Global hotkeys per workflow, as accelerator strings (e.g. "Super+Shift+KeyD").
+  // "Super" is the Windows key (= Cmd on the Mac dev machine). Key names follow
+  // the W3C KeyboardEvent.code values, so the in-app recorder can store them 1:1.
+  hotkeys: {
+    transcribe: string;
+  };
 }
 
 const SETTINGS_KEY = "blitztext.settings";
@@ -23,6 +29,9 @@ export const defaultSettings: Settings = {
     strongModel: "gpt-5.5",
     transcriptionModel: "gpt-4o-transcribe",
   },
+  hotkeys: {
+    transcribe: "Super+Shift+KeyD",
+  },
 };
 
 export function loadSettings(): Settings {
@@ -34,6 +43,7 @@ export function loadSettings(): Settings {
       ...structuredClone(defaultSettings),
       ...parsed,
       liteLLM: { ...defaultSettings.liteLLM, ...(parsed.liteLLM ?? {}) },
+      hotkeys: { ...defaultSettings.hotkeys, ...(parsed.hotkeys ?? {}) },
     };
   } catch {
     return structuredClone(defaultSettings);

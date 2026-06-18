@@ -74,16 +74,189 @@ async fn gateway_test(base_url: String) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
+/// Transcribes recorded audio via the gateway. Audio is passed from the webview
+/// as base64. The gateway may return JSON even for response_format=text, so we
+/// parse defensively (prefer a top-level `text` field, fall back to raw body).
+#[tauri::command]
+async fn transcribe(
+    base_url: String,
+    model: String,
+    language: Option<String>,
+    audio_base64: String,
+    filename: Option<String>,
+    content_type: Option<String>,
+) -> Result<String, String> {
+    use base64::Engine as _;
+
+    let key = litellm_key()?;
+    let url = format!("{}/v1/audio/transcriptions", normalize_base(&base_url));
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(audio_base64.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    let mime = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.unwrap_or_else(|| "audio.webm".to_string()))
+        .mime_str(&mime)
+        .map_err(|e| e.to_string())?;
+    let mut form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("model", model)
+        .text("response_format", "text");
+    if let Some(lang) = language {
+        let lang = lang.trim().to_string();
+        if !lang.is_empty() {
+            form = form.text("language", lang);
+        }
+    }
+
+    let response = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = response.status();
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status.as_u16(), body));
+    }
+
+    let transcript = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v["text"].as_str().map(|s| s.to_string()))
+        .unwrap_or(body);
+    Ok(transcript.trim().to_string())
+}
+
+// --- Push-to-talk global hotkeys -------------------------------------------
+
+/// Maps each currently registered global shortcut to its workflow id, so the
+/// shared handler knows which workflow to emit and so hotkeys can be rebound at
+/// runtime. The Windows/Super key plays the role `fn` plays on the macOS app.
+#[derive(Default)]
+struct HotkeyMap(std::sync::Mutex<std::collections::HashMap<tauri_plugin_global_shortcut::Shortcut, String>>);
+
+/// Rebinds the global hotkey for a workflow. Accepts an accelerator string
+/// (e.g. "Super+Shift+KeyD"); a real key is required because modifier-only
+/// combos cannot be registered as global shortcuts on Windows. Frees both the
+/// workflow's previous combo and any combo another workflow already holds, so
+/// bindings can never collide or leak.
+#[tauri::command]
+fn set_hotkey(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, HotkeyMap>,
+    workflow: String,
+    accelerator: String,
+) -> Result<(), String> {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
+    let shortcut =
+        Shortcut::from_str(accelerator.trim()).map_err(|e| format!("Ungueltiger Hotkey: {e}"))?;
+    let gs = app.global_shortcut();
+    let mut map = state.0.lock().map_err(|e| e.to_string())?;
+
+    // Release the workflow's old combo and any combo another workflow held.
+    let stale: Vec<Shortcut> = map
+        .iter()
+        .filter(|(s, w)| **w == workflow || **s == shortcut)
+        .map(|(s, _)| *s)
+        .collect();
+    for s in stale {
+        let _ = gs.unregister(s);
+        map.remove(&s);
+    }
+
+    gs.register(shortcut)
+        .map_err(|e| format!("Hotkey konnte nicht registriert werden: {e}"))?;
+    map.insert(shortcut, workflow);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri::{Emitter, Manager};
+    use tauri_plugin_global_shortcut::ShortcutState;
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            // Hold-to-talk: the plugin reports both Pressed and Released, so we
+            // emit a down/up pair the webview turns into start/stop recording.
+            // The workflow id is looked up from the runtime HotkeyMap.
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    let workflow = app
+                        .state::<HotkeyMap>()
+                        .0
+                        .lock()
+                        .ok()
+                        .and_then(|map| map.get(shortcut).cloned());
+                    if let Some(workflow) = workflow {
+                        let _ = match event.state() {
+                            ShortcutState::Pressed => app.emit("hotkey-down", workflow),
+                            ShortcutState::Released => app.emit("hotkey-up", workflow),
+                        };
+                    }
+                })
+                .build(),
+        )
+        .manage(HotkeyMap::default())
         .invoke_handler(tauri::generate_handler![
             secret_set,
             secret_get,
             secret_has,
-            gateway_test
+            gateway_test,
+            transcribe,
+            set_hotkey
         ])
+        .on_window_event(|window, event| {
+            // Closing the window only hides it; the app keeps running in the
+            // tray so the global hotkey stays alive. "Beenden" in the tray menu
+            // is the real quit.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
+        .setup(|app| {
+            // Hotkeys themselves are registered by the frontend from saved
+            // settings via `set_hotkey` once the webview loads.
+            build_tray(app.handle())?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// System-tray icon with a minimal menu (show window / quit). Lets the app keep
+/// running in the background so the global hotkey works while the window is
+/// hidden.
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::TrayIconBuilder;
+    use tauri::Manager;
+
+    let show = MenuItem::with_id(app, "show", "Fenster anzeigen", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    TrayIconBuilder::new()
+        .icon(app.default_window_icon().unwrap().clone())
+        .tooltip("Blitztext — Win+Shift+D halten zum Diktieren")
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
 }

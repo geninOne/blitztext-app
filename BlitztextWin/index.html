@@ -56,6 +56,35 @@
         </div>
         <p id="test-result" class="status"></p>
       </form>
+
+      <hr style="margin: 24px auto; max-width: 440px; opacity: 0.2;" />
+
+      <section class="settings">
+        <h2 style="font-size: 16px;">Tastenkürzel</h2>
+        <label>Diktat (halten zum Aufnehmen)</label>
+        <div class="actions">
+          <kbd id="hotkey-transcribe" style="padding: 4px 8px; border: 1px solid currentColor; border-radius: 6px; opacity: 0.85;"></kbd>
+          <button type="button" id="hotkey-record-btn">Ändern</button>
+          <button type="button" id="hotkey-reset-btn">Zurücksetzen</button>
+          <span id="hotkey-status" class="status"></span>
+        </div>
+        <p class="status" style="margin-top: 6px;">
+          Die Windows-Taste (am Mac: Cmd) wirkt wie <code>fn</code> in der Mac-App.
+          Mindestens ein Zusatz-Modifier nötig.
+        </p>
+      </section>
+
+      <hr style="margin: 24px auto; max-width: 440px; opacity: 0.2;" />
+
+      <section class="settings">
+        <h2 style="font-size: 16px;">Diktat testen</h2>
+        <div class="actions">
+          <button type="button" id="record-btn">Aufnahme starten</button>
+          <span id="record-status" class="status"></span>
+        </div>
+        <audio id="playback" controls style="width: 100%; max-width: 440px; margin-top: 8px;"></audio>
+        <p id="transcript"></p>
+      </section>
     </main>
   </body>
 </html>
