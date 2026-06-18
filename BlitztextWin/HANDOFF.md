@@ -125,8 +125,13 @@ M1 (online-only):
      the background hotkey survives; tray "Beenden" is the real quit.
    - Next: add the other three workflows as their own hotkeys + a hold/toggle
      mode setting (Mac parity) — pairs naturally with step 8.
-7. ⬜ Paste into the active app (Rust: `enigo` + clipboard; no permission prompt
-   on Windows; on macOS needs Accessibility permission)
+7. ✅ Paste into the active app — `paste_text(text)` command: writes the
+   clipboard (`arboard`), then sends Cmd/Ctrl+V via `enigo`. Wired into the
+   recorder's onstop after a successful transcript. Window stays hidden in the
+   tray so the paste lands in the previously focused app.
+   - **macOS caveat:** the synthetic keystroke needs Accessibility permission
+     (System Settings → Privacy & Security → Accessibility) for the dev binary;
+     Windows needs no prompt. First attempt may silently no-op until granted.
 8. ⬜ Wire the full workflow: record → transcribe → optional rewrite → paste,
    with status. Add a `chat_complete` Rust command (POST `/v1/chat/completions`,
    body `{model, messages, temperature?}`, **omit temperature for liteLLM**,

@@ -130,6 +130,44 @@ async fn transcribe(
     Ok(transcript.trim().to_string())
 }
 
+// --- Paste into the active app ---------------------------------------------
+
+/// Puts `text` on the clipboard and simulates the paste shortcut so it lands in
+/// whatever app currently has focus (our window stays hidden in the tray).
+/// macOS needs Accessibility permission for the synthetic keystroke; Windows
+/// needs no prompt.
+#[tauri::command]
+fn paste_text(text: String) -> Result<(), String> {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    arboard::Clipboard::new()
+        .and_then(|mut cb| cb.set_text(text))
+        .map_err(|e| format!("Zwischenablage: {e}"))?;
+
+    // Let the clipboard write settle before pasting.
+    std::thread::sleep(std::time::Duration::from_millis(80));
+
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Eingabe-Simulation nicht verfuegbar: {e}"))?;
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+
+    let paste = |enigo: &mut Enigo| -> Result<(), enigo::InputError> {
+        enigo.key(modifier, Direction::Press)?;
+        enigo.key(Key::Unicode('v'), Direction::Click)?;
+        enigo.key(modifier, Direction::Release)?;
+        Ok(())
+    };
+    paste(&mut enigo).map_err(|e| format!("Einfuegen fehlgeschlagen: {e}"))?;
+    Ok(())
+}
+
 // --- Push-to-talk global hotkeys -------------------------------------------
 
 /// Maps each currently registered global shortcut to its workflow id, so the
@@ -210,7 +248,8 @@ pub fn run() {
             secret_has,
             gateway_test,
             transcribe,
-            set_hotkey
+            set_hotkey,
+            paste_text
         ])
         .on_window_event(|window, event| {
             // Closing the window only hides it; the app keeps running in the

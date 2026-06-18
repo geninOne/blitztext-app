@@ -183,6 +183,14 @@ window.addEventListener("DOMContentLoaded", async () => {
           });
           transcriptEl.textContent = text || "(leer)";
           recordStatus.textContent = "";
+          // Paste the transcript into whatever app currently has focus.
+          if (text) {
+            try {
+              await invoke("paste_text", { text });
+            } catch (error) {
+              recordStatus.textContent = `Einfügen fehlgeschlagen: ${error}`;
+            }
+          }
         } catch (error) {
           recordStatus.textContent = `Fehler: ${error}`;
         }
