@@ -218,10 +218,17 @@ M1 (online-only):
   path); the OpenAI key field stores a secret but requests still target liteLLM.
 - Window naming/product polish ("blitztextwin").
 
-M2 (parity/polish): four workflows, settings + request-history UI, NSIS installer,
-Windows Authenticode signing, optional auto-update; add `windows-release.yml`
-(Windows runner) and `paths:` filters on `macos-release.yml` so each app only
-builds when its files change.
+M2 (parity/polish): request-history UI, Windows Authenticode signing, optional
+auto-update.
+- ✅ `windows-release.yml` (windows-latest: Node + Rust → NSIS/MSI; artifact on
+  PR/main, rolling `win-v0.1.<run>` prerelease on main, installers attached to
+  the `v*` release). `paths:` filter added to `macos-release.yml` PRs so each
+  app builds only for its own files; both `v*` release steps fall back to
+  `gh release upload` since both jobs target the same tag.
+- Note: `ci.yml` still builds macOS on every PR (unfiltered) — consider adding a
+  Windows CI job (tsc + cargo check) and paths there too.
+- Note: Windows bundles use `targets: "all"` (NSIS + MSI). If WiX/MSI ever fails
+  on the runner, narrow to `["nsis"]`.
 
 M3 (nice-to-have): local transcription via whisper.cpp / `whisper-rs` on both
 platforms (would also dodge the macOS Intel WhisperKit crash — see memory).
