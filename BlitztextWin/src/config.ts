@@ -5,11 +5,14 @@ export type ApiProvider = "openAI" | "liteLLM";
 
 export type TextTone = "formal" | "neutral" | "casual";
 export type EmojiDensity = "wenig" | "mittel" | "viel";
+// "hold" = push-to-talk (record while held); "toggle" = press to start/stop.
+export type HotkeyMode = "hold" | "toggle";
 
 export interface Settings {
   apiProvider: ApiProvider;
   // Launch the app on login (Windows: registry Run key / macOS: LaunchAgent).
   autostart: boolean;
+  hotkeyMode: HotkeyMode;
   liteLLM: {
     baseURL: string;
     fastModel: string;
@@ -59,6 +62,7 @@ export const LITELLM_KEY_ACCOUNT = "liteLLMApiKey";
 export const defaultSettings: Settings = {
   apiProvider: "liteLLM",
   autostart: false,
+  hotkeyMode: "hold",
   liteLLM: {
     baseURL: "",
     fastModel: "gpt-4o-mini",
@@ -97,7 +101,13 @@ export function loadSettings(): Settings {
       liteLLM: { ...defaultSettings.liteLLM, ...(parsed.liteLLM ?? {}) },
       hotkeys: { ...defaultSettings.hotkeys, ...(parsed.hotkeys ?? {}) },
       improve: { ...defaultSettings.improve, ...(parsed.improve ?? {}) },
-      dampf: { ...defaultSettings.dampf, ...(parsed.dampf ?? {}) },
+      // An empty stored dampf prompt falls back to the default text, so the
+      // pre-filled instruction is always visible (and editable).
+      dampf: {
+        systemPrompt: parsed.dampf?.systemPrompt?.trim()
+          ? parsed.dampf.systemPrompt
+          : defaultSettings.dampf.systemPrompt,
+      },
       emoji: { ...defaultSettings.emoji, ...(parsed.emoji ?? {}) },
     };
   } catch {

@@ -166,12 +166,53 @@ M1 (online-only):
 - **Dropped (macOS-only):** Installation, Bedienungshilfen, Sauber Entfernen,
   Sicherer Lokaler Modus (local Whisper is M3).
 
+## Tray popover UI (matches the macOS menu-bar dropdown)
+
+- **Single window** `main` (in `tauri.conf.json`): frameless, transparent,
+  always-on-top, skip-taskbar, `visible:false`, 380×540. `index.html` +
+  `src/popover.ts`. `macOSPrivateApi:true` (+ tauri `macos-private-api`
+  feature) so the transparent rounded popover works on the mac dev machine.
+  Single Vite page (no multi-page input).
+- The window holds **two views** toggled in JS: `#view-menu` (status, Online
+  Whisper card, four workflow rows with hotkey badges, Beenden) and
+  `#view-settings` (the ‹ Zurück header + two-tab Anpassen/Zugang UI). The gear
+  shows settings, ‹ Zurück returns to the menu — same window, like the macOS app.
+- Tray: left-click toggles the popover (or stops an active recording via
+  `popover-stop`); right-click menu = Einstellungen (shows popover + emits
+  `open-settings`) / Beenden. `show_menu_on_left_click(false)`.
+- **Positioning:** every tray event stores the icon's `Rect` in `TrayRect`
+  state; `show_popover()` computes a logical position from it (centered on the
+  icon, below on macOS / above on Windows) and `set_position`s BEFORE `show()`,
+  so the first open is already correct (the positioner-plugin approach left the
+  first open centered, so it was dropped — the dep is still in Cargo but unused).
+- **Hotkey mode** (`settings.hotkeyMode`, segmented Halten/Drücken under
+  Tastenkürzel): "hold" = down starts / up stops; "toggle" = press starts,
+  press again / Esc / tray click stops (auto-repeat debounced 500ms).
+- Stored dampf prompt falls back to the default text when empty, so the
+  pre-filled instruction is always visible.
+- Popover transient: `WindowEvent::Focused(false)` hides it — unless
+  `PopoverPinned` is set (the settings view pins it so editing fields doesn't
+  dismiss it).
+- Commands: `hide_popover`, `quit_app`, `set_recording` (RecordingFlag atomic
+  so the tray knows whether to stop vs toggle), `set_popover_pinned`.
+- Clicking a workflow row hides the popover then records in toggle mode (focus
+  returns to the prior app so paste lands there); a tray click stops it.
+- Icons via `tauri icon` from the macOS app icon; tray uses the monochrome
+  `icons/tray.png` (template). Light + dark via `prefers-color-scheme`.
+- **Icons:** app icons regenerated from the macOS app icon via `tauri icon`
+  (`BlitztextMac/Resources/.../icon_1024x1024.png`). The tray uses the monochrome
+  menu-bar glyph (`icons/tray.png`, copied from `menubar_icon@2x.png`),
+  embedded via `include_bytes!` + `Image::from_bytes` (tauri `image-png`
+  feature) with `icon_as_template(true)` so macOS tints it.
+- **Light + dark mode:** both `index.html` and `settings.html` define their
+  palette as CSS variables with a `@media (prefers-color-scheme: light)`
+  override, matching the macOS app's light/dark popover.
+
 ## Open follow-ups (post-M1)
 
 - Hotkey capture vs. an active global shortcut: while recording a new combo, the
   OS may swallow the keystroke if it equals a registered hotkey. Acceptable for
   now; could unregister during capture.
-- Hold vs. toggle mode setting (Mac parity, deferred from the settings pass).
 - Verlauf / request-history tab (Mac has it; needs request logging).
 - OpenAI direct provider is not wired in Rust yet (gateway is the supported
   path); the OpenAI key field stores a secret but requests still target liteLLM.

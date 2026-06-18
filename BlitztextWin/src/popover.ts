@@ -8,10 +8,12 @@ import {
   hasSecret,
   LITELLM_KEY_ACCOUNT,
   workflowLabels,
+  workflowBrandNames,
   type Settings,
   type WorkflowType,
   type TextTone,
   type EmojiDensity,
+  type HotkeyMode,
 } from "./config";
 import { systemPromptFor } from "./prompts";
 
@@ -30,8 +32,6 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-// Pick a recording container the platform supports and Whisper accepts.
-// WKWebView (macOS) typically yields mp4/aac; WebView2 (Windows) yields webm/opus.
 function pickRecorderMimeType(): string | undefined {
   const preferred = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg"];
   return preferred.find(
@@ -48,16 +48,12 @@ function extForMime(mime: string): string {
   return "webm";
 }
 
-// Wire an inline segmented control: highlights the active button and reports
-// selections. Buttons carry their value in data-val.
 function setupSegmented(
   containerId: string,
   current: string,
   onSelect: (value: string) => void,
 ): void {
-  const buttons = Array.from(
-    el(containerId).querySelectorAll<HTMLButtonElement>("button"),
-  );
+  const buttons = Array.from(el(containerId).querySelectorAll<HTMLButtonElement>("button"));
   const render = (value: string) =>
     buttons.forEach((b) => b.classList.toggle("active", b.dataset.val === value));
   buttons.forEach((b) =>
@@ -69,11 +65,213 @@ function setupSegmented(
   render(current);
 }
 
+// Accelerator strings use W3C KeyboardEvent.code names ("Super+Shift+KeyD").
+function accelParts(accel: string): string[] {
+  return accel.split("+").map((part) => {
+    if (part === "Super") return "Win";
+    if (part === "Control") return "Ctrl";
+    if (part.startsWith("Key")) return part.slice(3);
+    if (part.startsWith("Digit")) return part.slice(5);
+    return part;
+  });
+}
+
+function accelFromEvent(event: KeyboardEvent): string | null {
+  if (/^(Meta|Control|Alt|Shift)(Left|Right)$/.test(event.code)) return null;
+  const mods: string[] = [];
+  if (event.metaKey) mods.push("Super");
+  if (event.ctrlKey) mods.push("Control");
+  if (event.altKey) mods.push("Alt");
+  if (event.shiftKey) mods.push("Shift");
+  if (mods.length === 0 || !event.code) return null;
+  return [...mods, event.code].join("+");
+}
+
+// Monochrome SVG row glyphs (mic / check / flame / smile).
+const ICONS: Record<WorkflowType, string> = {
+  transcribe: `<path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="22"/>`,
+  improve: `<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>`,
+  dampf: `<path d="M12 2s4 4 4 8a4 4 0 0 1-8 0c0-1.5.5-2.5.5-2.5"/><path d="M12 22a6 6 0 0 0 6-6c0-2-1-3.5-2-5"/>`,
+  emoji: `<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>`,
+};
+
+const SUBTITLES: Record<WorkflowType, string> = {
+  transcribe: "Online: Transkription über LiteLLM",
+  improve: "Geschrieben sprechen.",
+  dampf: "Frust rein. Entspannt raus.",
+  emoji: "Text rein. Emojis dazu.",
+};
+
+const WORKFLOW_ORDER: WorkflowType[] = ["transcribe", "improve", "dampf", "emoji"];
+
 window.addEventListener("DOMContentLoaded", async () => {
-  const settings = loadSettings();
+  let settings: Settings = loadSettings();
   const persist = () => saveSettings(settings);
 
-  // --- Tabs (Anpassen / Zugang) ---
+  // --- View switching (menu <-> settings, in the same popover) ---
+  const viewMenu = el("view-menu");
+  const viewSettings = el("view-settings");
+  async function showSettingsView(): Promise<void> {
+    viewMenu.hidden = true;
+    viewSettings.hidden = false;
+    await invoke("set_popover_pinned", { pinned: true }); // don't dismiss on blur while editing
+  }
+  async function showMenuView(): Promise<void> {
+    viewSettings.hidden = true;
+    viewMenu.hidden = false;
+    await invoke("set_popover_pinned", { pinned: false });
+  }
+  el("gear").addEventListener("click", () => void showSettingsView());
+  el("back").addEventListener("click", () => void showMenuView());
+  el("quit").addEventListener("click", () => void invoke("quit_app"));
+  await listen("open-settings", () => void showSettingsView());
+
+  // ============================ Menu ============================
+  const statusEl = el("status");
+  const statusText = el("status-text");
+  function setStatus(text: string, cls = ""): void {
+    statusText.textContent = text;
+    statusEl.className = `status ${cls}`.trim();
+  }
+
+  const list = el("workflow-list");
+  function renderRows(): void {
+    list.innerHTML = "";
+    for (const workflow of WORKFLOW_ORDER) {
+      const badges = accelParts(settings.hotkeys[workflow])
+        .map((key) => `<span class="key">${key}</span>`)
+        .join("");
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = `
+        <div class="row-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[workflow]}</svg>
+        </div>
+        <div class="row-text">
+          <div class="row-name">${workflowBrandNames[workflow]}</div>
+          <div class="row-sub">${SUBTITLES[workflow]}</div>
+        </div>
+        <div class="badges">${badges}</div>`;
+      row.addEventListener("click", () => void startFromRow(workflow));
+      list.append(row);
+    }
+  }
+
+  // --- Dictation pipeline ---
+  let mediaRecorder: MediaRecorder | null = null;
+  let chunks: Blob[] = [];
+  let currentWorkflow: WorkflowType = "transcribe";
+
+  async function startRecording(workflow: WorkflowType): Promise<void> {
+    if (mediaRecorder && mediaRecorder.state === "recording") return;
+    settings = loadSettings(); // pick up changes made in the settings view
+    currentWorkflow = workflow;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+      chunks = [];
+      const chosen = pickRecorderMimeType();
+      const options: MediaRecorderOptions = { audioBitsPerSecond: 128000 };
+      if (chosen) options.mimeType = chosen;
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorder = recorder;
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const mime = recorder.mimeType || "audio/webm";
+        const baseMime = mime.split(";")[0];
+        try {
+          const blob = new Blob(chunks, { type: mime });
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          setStatus("Transkribiere ...", "busy");
+          const text = await invoke<string>("transcribe", {
+            baseUrl: settings.liteLLM.baseURL.trim(),
+            model: settings.liteLLM.transcriptionModel.trim() || "gpt-4o-transcribe",
+            language: "de",
+            audioBase64: toBase64(bytes),
+            filename: `audio.${extForMime(mime)}`,
+            contentType: baseMime,
+          });
+
+          let result = text;
+          const system = systemPromptFor(currentWorkflow, settings);
+          if (system && text) {
+            const model =
+              currentWorkflow === "dampf"
+                ? settings.liteLLM.strongModel.trim() || defaultSettings.liteLLM.strongModel
+                : settings.liteLLM.fastModel.trim() || defaultSettings.liteLLM.fastModel;
+            setStatus(`Verarbeite (${workflowLabels[currentWorkflow]}) ...`, "busy");
+            result = await invoke<string>("chat_complete", {
+              baseUrl: settings.liteLLM.baseURL.trim(),
+              model,
+              system,
+              user: text,
+            });
+          }
+
+          if (result) await invoke("paste_text", { text: result });
+          setStatus("Bereit");
+        } catch (error) {
+          setStatus(`Fehler: ${error}`);
+        } finally {
+          await invoke("set_recording", { active: false });
+        }
+      };
+      recorder.start();
+      await invoke("set_recording", { active: true });
+      setStatus(`Aufnahme (${workflowLabels[workflow]}) ...`, "recording");
+    } catch (error) {
+      setStatus(`Mikrofon-Fehler: ${error}`);
+      await invoke("set_recording", { active: false });
+    }
+  }
+
+  function stopRecording(): void {
+    if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+  }
+
+  // Click a row: hide the popover (so focus + paste return to the active app),
+  // then record in toggle mode. A tray click stops it (via "popover-stop").
+  async function startFromRow(workflow: WorkflowType): Promise<void> {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      stopRecording();
+      return;
+    }
+    await invoke("hide_popover");
+    await startRecording(workflow);
+  }
+
+  // Hotkey handling honors the mode: "hold" = record while held (down starts,
+  // up stops); "toggle" = press to start, press again (or Esc/tray) to stop.
+  let lastHotkeyDown = 0;
+  await listen<string>("hotkey-down", (event) => {
+    const workflow = (event.payload as WorkflowType) || "transcribe";
+    if (settings.hotkeyMode === "toggle") {
+      // Ignore OS key auto-repeat so a held key doesn't flip start/stop.
+      const now = performance.now();
+      const isRepeat = now - lastHotkeyDown < 500;
+      lastHotkeyDown = now;
+      if (isRepeat) return;
+      if (mediaRecorder && mediaRecorder.state === "recording") stopRecording();
+      else void startRecording(workflow);
+    } else {
+      void startRecording(workflow); // hold: re-entry is ignored in startRecording
+    }
+  });
+  await listen("hotkey-up", () => {
+    if (settings.hotkeyMode === "hold") stopRecording();
+  });
+  await listen("popover-stop", () => stopRecording());
+
+  // ============================ Settings ============================
   const tabButtons = Array.from(el("tabs").querySelectorAll<HTMLButtonElement>("button"));
   function showTab(name: string): void {
     tabButtons.forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
@@ -81,10 +279,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     el("tab-access").hidden = name !== "access";
   }
   tabButtons.forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab!)));
-  // Open on "Zugang" until the gateway is configured, otherwise "Anpassen".
-  showTab(settings.liteLLM.baseURL ? "customize" : "access");
+  showTab("customize");
 
-  // --- Access tab: provider + credentials + models ---
+  // Provider + credentials + models
   const baseURL = el<HTMLInputElement>("baseURL");
   const fastModel = el<HTMLInputElement>("fastModel");
   const strongModel = el<HTMLInputElement>("strongModel");
@@ -117,7 +314,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   el("settings-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     saveStatus.textContent = "";
-
     settings.liteLLM = {
       baseURL: baseURL.value.trim(),
       fastModel: fastModel.value.trim() || defaultSettings.liteLLM.fastModel,
@@ -138,7 +334,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         return;
       }
     }
-
     const oaKey = openaiKey.value.trim();
     if (oaKey) {
       try {
@@ -149,7 +344,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         return;
       }
     }
-
     saveStatus.textContent = "Gespeichert";
     setTimeout(() => (saveStatus.textContent = ""), 2000);
   });
@@ -157,8 +351,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   const testResult = el("test-result");
   el<HTMLButtonElement>("test-btn").addEventListener("click", async () => {
     testResult.textContent = "Teste Verbindung ...";
-
-    // Save a freshly typed key first, so "enter key + test" works in one step.
     const key = apiKey.value.trim();
     if (key) {
       try {
@@ -170,11 +362,8 @@ window.addEventListener("DOMContentLoaded", async () => {
         return;
       }
     }
-
     try {
-      const models = await invoke<string[]>("gateway_test", {
-        baseUrl: baseURL.value.trim(),
-      });
+      const models = await invoke<string[]>("gateway_test", { baseUrl: baseURL.value.trim() });
       testResult.textContent = models.length
         ? `OK, ${models.length} Modelle: ${models.slice(0, 8).join(", ")}${models.length > 8 ? " ..." : ""}`
         : "Verbunden, aber keine Modelle gelistet.";
@@ -183,7 +372,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // --- Access tab: autostart (launch on login) ---
+  // Autostart
   const autostartEl = el<HTMLInputElement>("autostart");
   try {
     autostartEl.checked = await invoke<boolean>("get_autostart");
@@ -196,18 +385,22 @@ window.addEventListener("DOMContentLoaded", async () => {
       settings.autostart = autostartEl.checked;
       persist();
     } catch (error) {
-      autostartEl.checked = !autostartEl.checked; // revert on failure
+      autostartEl.checked = !autostartEl.checked;
       saveStatus.textContent = `Autostart-Fehler: ${error}`;
     }
   });
 
-  // --- Customize tab: per-workflow tuning (saved immediately on change) ---
+  // Per-workflow tuning
   setupSegmented("tone-seg", settings.improve.tone, (value) => {
     settings.improve.tone = value as TextTone;
     persist();
   });
   setupSegmented("density-seg", settings.emoji.density, (value) => {
     settings.emoji.density = value as EmojiDensity;
+    persist();
+  });
+  setupSegmented("mode-seg", settings.hotkeyMode, (value) => {
+    settings.hotkeyMode = value as HotkeyMode;
     persist();
   });
 
@@ -269,160 +462,17 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   renderTerms();
 
-  // --- Dictation: record -> transcribe -> optional rewrite -> paste ---
-  // Driven by the record button (toggle) and the global push-to-talk hotkeys:
-  // hotkey down = start, up = stop. The workflow id chooses the chat step.
-  let mediaRecorder: MediaRecorder | null = null;
-  let chunks: Blob[] = [];
-  let currentWorkflow: WorkflowType = "transcribe";
-  const recordBtn = el<HTMLButtonElement>("record-btn");
-  const recordStatus = el("record-status");
-  const transcriptEl = el("transcript");
-
-  async function startRecording(): Promise<void> {
-    if (mediaRecorder && mediaRecorder.state === "recording") return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          // Aufnahme folgt dem System-Standard-Eingabegeraet (kein deviceId).
-          // Processing-Filter aus: fuers Diktat liefert das rohe Signal die
-          // bessere Qualitaet (AGC pumpt, NS schluckt Konsonanten).
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      });
-      chunks = [];
-      const chosen = pickRecorderMimeType();
-      const options: MediaRecorderOptions = { audioBitsPerSecond: 128000 };
-      if (chosen) options.mimeType = chosen;
-      const recorder = new MediaRecorder(stream, options);
-      mediaRecorder = recorder;
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        recordBtn.textContent = "Aufnahme starten";
-        const mime = recorder.mimeType || "audio/webm";
-        const baseMime = mime.split(";")[0];
-        try {
-          const blob = new Blob(chunks, { type: mime });
-          el<HTMLAudioElement>("playback").src = URL.createObjectURL(blob);
-          const bytes = new Uint8Array(await blob.arrayBuffer());
-          recordStatus.textContent = `Transkribiere (${baseMime}, ${bytes.length} Bytes) ...`;
-          const text = await invoke<string>("transcribe", {
-            baseUrl: settings.liteLLM.baseURL.trim(),
-            model: settings.liteLLM.transcriptionModel.trim() || "gpt-4o-transcribe",
-            language: "de",
-            audioBase64: toBase64(bytes),
-            filename: `audio.${extForMime(mime)}`,
-            contentType: baseMime,
-          });
-
-          // For rewrite workflows, run the transcript through the chat model
-          // with the matching system prompt. Plain transcription skips this.
-          let result = text;
-          const system = systemPromptFor(currentWorkflow, settings);
-          if (system && text) {
-            const model =
-              currentWorkflow === "dampf"
-                ? settings.liteLLM.strongModel.trim() || defaultSettings.liteLLM.strongModel
-                : settings.liteLLM.fastModel.trim() || defaultSettings.liteLLM.fastModel;
-            recordStatus.textContent = `Verarbeite (${workflowLabels[currentWorkflow]}) ...`;
-            result = await invoke<string>("chat_complete", {
-              baseUrl: settings.liteLLM.baseURL.trim(),
-              model,
-              system,
-              user: text,
-            });
-          }
-
-          transcriptEl.textContent = result || "(leer)";
-          recordStatus.textContent = "";
-          // Paste the result into whatever app currently has focus.
-          if (result) {
-            try {
-              await invoke("paste_text", { text: result });
-            } catch (error) {
-              recordStatus.textContent = `Einfügen fehlgeschlagen: ${error}`;
-            }
-          }
-        } catch (error) {
-          recordStatus.textContent = `Fehler: ${error}`;
-        }
-      };
-      recorder.start();
-      recordBtn.textContent = "Stoppen";
-      recordStatus.textContent = "Aufnahme läuft ...";
-    } catch (error) {
-      recordStatus.textContent = `Mikrofon-Fehler: ${error}`;
-    }
-  }
-
-  function stopRecording(): void {
-    if (mediaRecorder && mediaRecorder.state === "recording") {
-      mediaRecorder.stop();
-    }
-  }
-
-  recordBtn.addEventListener("click", () => {
-    if (mediaRecorder && mediaRecorder.state === "recording") {
-      stopRecording();
-    } else {
-      currentWorkflow = "transcribe";
-      void startRecording();
-    }
-  });
-
-  // Global push-to-talk hotkeys, registered in Rust. The down event carries the
-  // workflow id; hold to record. Pressed may repeat while held; startRecording()
-  // ignores re-entry.
-  await listen<string>("hotkey-down", (event) => {
-    currentWorkflow = (event.payload as WorkflowType) || "transcribe";
-    void startRecording();
-  });
-  await listen("hotkey-up", () => stopRecording());
-
-  // --- Configurable hotkeys (one per workflow) ---
+  // Hotkeys (rebind UI + registration)
   const hotkeyStatus = el("hotkey-status");
   const hotkeyList = el("hotkey-list");
   const displays = {} as Record<WorkflowType, HTMLElement>;
   const changeButtons = {} as Record<WorkflowType, HTMLButtonElement>;
   let capturingWorkflow: WorkflowType | null = null;
-  const workflowOrder: WorkflowType[] = ["transcribe", "improve", "dampf", "emoji"];
-
-  // Accelerator strings use W3C KeyboardEvent.code names ("Super+Shift+KeyD").
-  // Render them human-readably (Win + Shift + D) for the UI.
-  function formatAccel(accel: string): string {
-    return accel
-      .split("+")
-      .map((part) => {
-        if (part === "Super") return "Win";
-        if (part === "Control") return "Ctrl";
-        if (part.startsWith("Key")) return part.slice(3);
-        if (part.startsWith("Digit")) return part.slice(5);
-        return part;
-      })
-      .join(" + ");
-  }
-
-  // Build an accelerator from a key event; requires at least one modifier and a
-  // non-modifier key so we never hijack plain typing or register half a combo.
-  function accelFromEvent(event: KeyboardEvent): string | null {
-    if (/^(Meta|Control|Alt|Shift)(Left|Right)$/.test(event.code)) return null;
-    const mods: string[] = [];
-    if (event.metaKey) mods.push("Super");
-    if (event.ctrlKey) mods.push("Control");
-    if (event.altKey) mods.push("Alt");
-    if (event.shiftKey) mods.push("Shift");
-    if (mods.length === 0 || !event.code) return null;
-    return [...mods, event.code].join("+");
-  }
 
   function renderHotkey(workflow: WorkflowType): void {
-    displays[workflow].textContent = formatAccel(settings.hotkeys[workflow]);
+    displays[workflow].innerHTML = accelParts(settings.hotkeys[workflow])
+      .map((key) => `<span class="key">${key}</span>`)
+      .join("");
   }
 
   async function applyHotkey(workflow: WorkflowType, accel: string): Promise<void> {
@@ -431,6 +481,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       settings.hotkeys[workflow] = accel;
       persist();
       renderHotkey(workflow);
+      renderRows(); // keep the menu badges in sync
       hotkeyStatus.textContent = `${workflowLabels[workflow]}: gespeichert`;
       setTimeout(() => (hotkeyStatus.textContent = ""), 2000);
     } catch (error) {
@@ -439,41 +490,50 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   function endCapture(message: string): void {
-    if (capturingWorkflow) changeButtons[capturingWorkflow].textContent = "Ändern";
+    if (capturingWorkflow) changeButtons[capturingWorkflow].textContent = "✎";
     capturingWorkflow = null;
     hotkeyStatus.textContent = message;
   }
 
-  for (const workflow of workflowOrder) {
+  for (const workflow of WORKFLOW_ORDER) {
     const row = document.createElement("div");
     row.className = "hotkey-row";
+
+    const glyph = document.createElement("span");
+    glyph.className = "hk-glyph";
+    glyph.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[workflow]}</svg>`;
 
     const label = document.createElement("span");
     label.className = "wf-label";
     label.textContent = workflowLabels[workflow];
 
-    const display = document.createElement("kbd");
+    const display = document.createElement("div");
+    display.className = "badges";
     displays[workflow] = display;
 
     const changeBtn = document.createElement("button");
     changeBtn.type = "button";
-    changeBtn.textContent = "Ändern";
+    changeBtn.className = "hk-btn";
+    changeBtn.textContent = "✎";
+    changeBtn.title = "Ändern";
     changeButtons[workflow] = changeBtn;
     changeBtn.addEventListener("click", () => {
       if (capturingWorkflow) endCapture("");
       capturingWorkflow = workflow;
-      changeBtn.textContent = "Tasten drücken ...";
+      changeBtn.textContent = "…";
       hotkeyStatus.textContent = `${workflowLabels[workflow]}: Kombination drücken (Esc bricht ab).`;
     });
 
     const resetBtn = document.createElement("button");
     resetBtn.type = "button";
-    resetBtn.textContent = "Zurücksetzen";
+    resetBtn.className = "hk-btn";
+    resetBtn.textContent = "↺";
+    resetBtn.title = "Zurücksetzen";
     resetBtn.addEventListener("click", () =>
       void applyHotkey(workflow, defaultSettings.hotkeys[workflow]),
     );
 
-    row.append(label, display, changeBtn, resetBtn);
+    row.append(glyph, label, display, changeBtn, resetBtn);
     hotkeyList.append(row);
     renderHotkey(workflow);
   }
@@ -486,18 +546,19 @@ window.addEventListener("DOMContentLoaded", async () => {
       return;
     }
     const accel = accelFromEvent(event);
-    if (!accel) return; // wait until a real key is pressed with a modifier held
+    if (!accel) return;
     const workflow = capturingWorkflow;
     endCapture("");
     void applyHotkey(workflow, accel);
   });
 
-  // Register all saved hotkeys now that the webview is up.
-  for (const workflow of workflowOrder) {
+  // Initial render + register all saved hotkeys.
+  renderRows();
+  for (const workflow of WORKFLOW_ORDER) {
     try {
       await invoke("set_hotkey", { workflow, accelerator: settings.hotkeys[workflow] });
-    } catch (error) {
-      hotkeyStatus.textContent = `${workflowLabels[workflow]}: ${error}`;
+    } catch {
+      /* invalid combo surfaced when the user edits it */
     }
   }
 });

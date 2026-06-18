@@ -2,213 +2,317 @@
 <html lang="de">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Blitztext</title>
-    <script type="module" src="/src/main.ts" defer></script>
+    <script type="module" src="/src/popover.ts" defer></script>
     <style>
-      .settings { max-width: 460px; margin: 0 auto; text-align: left; }
-      .settings label { display: block; margin: 12px 0 4px; font-size: 13px; font-weight: 600; }
-      .settings input, .settings select, .settings textarea {
-        width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px;
-        font: inherit;
+      :root {
+        --bg: rgba(28, 28, 30, 0.97);
+        --border: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --text-2: rgba(255, 255, 255, 0.55);
+        --text-3: rgba(255, 255, 255, 0.32);
+        --row-hover: rgba(255, 255, 255, 0.06);
+        --whisper-bg: rgba(255, 255, 255, 0.035);
+        --row-icon-bg: rgba(255, 255, 255, 0.06);
+        --field: rgba(255, 255, 255, 0.06);
+        --field-hover: rgba(255, 255, 255, 0.1);
+        --key-bg: rgba(255, 255, 255, 0.12);
+        --key-border: rgba(255, 255, 255, 0.18);
+        --accent: #4aa3ff;
+        --ok: #36d07a;
       }
-      .settings textarea { resize: vertical; min-height: 60px; }
-      .subtitle { opacity: 0.7; margin-top: 0; }
-      .status { margin-left: 8px; opacity: 0.8; font-size: 12px; font-weight: 400; }
-      .actions { margin-top: 14px; display: flex; align-items: center; gap: 6px; }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: rgba(250, 250, 252, 0.98);
+          --border: rgba(0, 0, 0, 0.08);
+          --text: rgba(0, 0, 0, 0.9);
+          --text-2: rgba(0, 0, 0, 0.5);
+          --text-3: rgba(0, 0, 0, 0.32);
+          --row-hover: rgba(0, 0, 0, 0.05);
+          --whisper-bg: rgba(0, 0, 0, 0.03);
+          --row-icon-bg: rgba(0, 0, 0, 0.05);
+          --field: rgba(0, 0, 0, 0.05);
+          --field-hover: rgba(0, 0, 0, 0.09);
+          --key-bg: rgba(0, 0, 0, 0.07);
+          --key-border: rgba(0, 0, 0, 0.12);
+          --accent: #0a84ff;
+          --ok: #2bbf63;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100vh; background: transparent; overflow: hidden; }
+      body {
+        font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+        color: var(--text); font-size: 13px;
+        -webkit-user-select: none; user-select: none;
+      }
+      .card {
+        max-height: calc(100vh - 12px); margin: 6px;
+        background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+        overflow: hidden; backdrop-filter: blur(20px);
+        display: flex; flex-direction: column;
+      }
+      /* Menu fits its content (the rest of the window stays transparent);
+         settings grows up to the card's max-height and scrolls inside. */
+      .view { display: flex; flex-direction: column; min-height: 0; }
+      [hidden] { display: none !important; }
 
-      /* Two-tab segmented control (top) */
-      .tabs {
-        max-width: 460px; margin: 0 auto 8px; display: flex; gap: 0;
-        border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 8px; overflow: hidden;
+      header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 16px 8px;
       }
-      .tabs button {
-        flex: 1; padding: 7px 0; border: none; background: transparent; cursor: pointer;
-        font: inherit; font-size: 13px; font-weight: 600; opacity: 0.7;
+      .brand { display: flex; align-items: baseline; gap: 6px; }
+      .brand-name { font-size: 11px; font-weight: 600; color: var(--text-2); }
+      .brand-tag { font-size: 9.5px; font-weight: 600; color: var(--text-3); }
+      .icon-btn {
+        width: 28px; height: 28px; border: none; border-radius: 6px;
+        background: transparent; color: var(--text-2); cursor: pointer;
+        font-size: 15px; line-height: 1; display: grid; place-items: center;
       }
-      .tabs button.active { background: rgba(128, 128, 128, 0.18); opacity: 1; }
+      .icon-btn:hover { background: var(--row-hover); color: var(--text); }
 
-      /* Quiet section label (uppercase, small, grey) */
-      .section { margin-top: 22px; }
-      .section-label {
-        font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-        text-transform: uppercase; opacity: 0.55; margin-bottom: 8px;
+      .status {
+        display: flex; align-items: center; gap: 7px;
+        padding: 4px 16px 12px; font-size: 13px; font-weight: 600;
       }
-      .hint { font-size: 11px; opacity: 0.65; margin: 0 0 8px; }
-      .sub-label { font-size: 12px; opacity: 0.7; margin: 10px 0 4px; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+      .status.recording .dot { background: #ff5d5d; }
+      .status.busy .dot { background: var(--accent); }
 
-      /* Inline segmented control (tone / density / provider) */
-      .segmented {
-        display: flex; border: 1px solid rgba(128, 128, 128, 0.3);
-        border-radius: 7px; overflow: hidden;
+      .whisper {
+        display: flex; align-items: center; gap: 10px;
+        margin: 0 12px 8px; padding: 10px;
+        border: 1px solid var(--border); border-radius: 10px; background: var(--whisper-bg);
       }
-      .segmented button {
-        flex: 1; padding: 6px 0; border: none; background: transparent; cursor: pointer;
-        font: inherit; font-size: 12px; opacity: 0.7;
-        border-left: 1px solid rgba(128, 128, 128, 0.2);
+      .whisper svg { color: var(--accent); flex-shrink: 0; }
+      .whisper-title { font-size: 11.5px; font-weight: 600; }
+      .whisper-sub { font-size: 10.5px; color: var(--text-2); margin-top: 2px; line-height: 1.3; }
+
+      .workflows { padding: 2px 6px; }
+      .row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 10px; cursor: pointer; }
+      .row:hover { background: var(--row-hover); }
+      .row-icon {
+        width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+        display: grid; place-items: center; background: var(--row-icon-bg); color: var(--text-2);
       }
-      .segmented button:first-child { border-left: none; }
-      .segmented button.active { background: rgba(128, 128, 128, 0.2); opacity: 1; font-weight: 600; }
+      .row-text { flex: 1; min-width: 0; }
+      .row-name { font-size: 13px; font-weight: 500; }
+      .row-sub { font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .badges { display: flex; gap: 3px; flex-shrink: 0; }
+      .key { font-size: 10.5px; font-weight: 600; color: var(--text); padding: 4px 7px; border-radius: 6px; background: var(--key-bg); border: 0.8px solid var(--key-border); }
 
-      /* Hotkey rows */
-      .hotkey-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
-      .hotkey-row .wf-label { min-width: 120px; font-weight: 600; font-size: 13px; }
-      kbd { padding: 4px 8px; border: 1px solid currentColor; border-radius: 6px; opacity: 0.85; font-size: 12px; }
+      footer { margin-top: auto; display: flex; justify-content: center; padding: 8px; }
+      .quit { border: none; background: transparent; color: var(--text-3); cursor: pointer; font-size: 10px; font-weight: 600; padding: 4px 10px; }
+      .quit:hover { color: var(--text-2); }
 
-      /* Custom-term chips */
-      .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
-      .chip {
-        display: inline-flex; align-items: center; gap: 4px;
-        padding: 3px 8px; border-radius: 999px;
-        border: 1px solid rgba(128, 128, 128, 0.25); background: rgba(128, 128, 128, 0.1);
-        font-size: 12px;
+      /* ---------- Settings view ---------- */
+      .topbar {
+        display: flex; align-items: center; height: 44px; padding: 0 10px; position: relative;
+        border-bottom: 1px solid var(--border); flex-shrink: 0;
       }
-      .chip button { border: none; background: transparent; cursor: pointer; opacity: 0.6; font: inherit; padding: 0; }
+      .back { border: none; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-size: 13px; padding: 4px 6px; }
+      .topbar .title { position: absolute; left: 0; right: 0; text-align: center; font-size: 13px; font-weight: 600; pointer-events: none; }
+      .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 20px; }
 
-      .switch-row { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
-      .switch-row input { width: auto; }
+      .tabs { display: flex; padding: 3px; gap: 3px; margin-bottom: 4px; background: var(--field); border-radius: 9px; }
+      .tabs button { flex: 1; padding: 7px 0; border: none; border-radius: 7px; background: transparent; color: var(--text-2); cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; }
+      .tabs button.active { background: var(--accent); color: #fff; }
+
+      label { display: block; margin: 12px 0 4px; font-size: 12.5px; font-weight: 600; }
+      input, textarea { width: 100%; padding: 8px 10px; border-radius: 7px; font: inherit; font-size: 12.5px; background: var(--field); color: var(--text); border: 1px solid var(--border); outline: none; }
+      input:focus, textarea:focus { border-color: var(--accent); }
+      input::placeholder, textarea::placeholder { color: var(--text-3); }
+      textarea { resize: vertical; min-height: 64px; }
+
+      .section { margin-top: 20px; }
+      .section-label { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); margin-bottom: 8px; }
+      .hint { font-size: 11px; color: var(--text-2); margin: 0 0 8px; line-height: 1.35; }
+      .sub-label { font-size: 12px; color: var(--text-2); margin: 12px 0 5px; }
+      .field-status { margin-left: 8px; font-size: 12px; color: var(--text-2); font-weight: 400; }
+      .actions { margin-top: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .actions button:not(.seg) { border: 1px solid var(--border); background: var(--field); color: var(--text); border-radius: 7px; padding: 7px 12px; cursor: pointer; font: inherit; font-size: 12.5px; }
+      .actions button:not(.seg):hover { background: var(--field-hover); }
+      button[type="submit"] { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+
+      .segmented { display: flex; padding: 3px; gap: 3px; background: var(--field); border-radius: 8px; }
+      .segmented button { flex: 1; padding: 6px 0; border: none; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; font: inherit; font-size: 12px; }
+      .segmented button.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+      .hotkey-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+      .hk-glyph { width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0; display: grid; place-items: center; background: var(--row-icon-bg); color: var(--text-2); }
+      .hotkey-row .wf-label { flex: 1; min-width: 0; font-weight: 600; font-size: 12.5px; }
+      .hotkey-row .badges { display: flex; gap: 3px; flex-shrink: 0; }
+      .hk-btn { width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center; border: 1px solid var(--border); background: var(--field); color: var(--text-2); border-radius: 7px; cursor: pointer; font: inherit; font-size: 13px; }
+      .hk-btn:hover { background: var(--field-hover); color: var(--text); }
+
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+      .chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; font-size: 12px; background: var(--field); border: 1px solid var(--border); }
+      .chip button { border: none; background: transparent; color: var(--text-3); cursor: pointer; font: inherit; padding: 0; }
+      .chip button:hover { color: var(--text); }
+
+      .switch-row { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 13px; }
+      .switch-row input { width: auto; accent-color: var(--accent); }
     </style>
   </head>
 
   <body>
-    <main class="container">
-      <h1>Blitztext</h1>
-      <p class="subtitle">Einstellungen</p>
+    <div class="card">
+      <!-- ===================== Menu view ===================== -->
+      <div id="view-menu" class="view">
+        <header>
+          <div class="brand">
+            <span class="brand-name">Blitztext</span>
+            <span class="brand-tag">Windows Preview</span>
+          </div>
+          <button id="gear" class="icon-btn" title="Einstellungen" aria-label="Einstellungen">⚙</button>
+        </header>
 
-      <div class="tabs" id="tabs">
-        <button type="button" data-tab="customize" class="active">Anpassen</button>
-        <button type="button" data-tab="access">Zugang</button>
+        <div class="status" id="status">
+          <span class="dot"></span>
+          <span id="status-text">Bereit</span>
+        </div>
+
+        <div class="whisper">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          </svg>
+          <div>
+            <div class="whisper-title">Online Whisper</div>
+            <div class="whisper-sub">Blitztext nutzt gerade die Online-Transkription über LiteLLM Gateway.</div>
+          </div>
+        </div>
+
+        <div class="workflows" id="workflow-list"></div>
+
+        <footer><button class="quit" id="quit">Beenden</button></footer>
       </div>
 
-      <!-- ===================== Tab: Anpassen ===================== -->
-      <div id="tab-customize" class="settings tab-panel">
-        <!-- Tastenkürzel -->
-        <div class="section">
-          <div class="section-label">Tastenkürzel</div>
-          <p class="hint">
-            Halten zum Aufnehmen, loslassen verarbeitet und fügt ein. Die
-            Windows-Taste (am Mac: Cmd) wirkt wie <code>fn</code> in der Mac-App.
-            Mindestens ein Zusatz-Modifier nötig.
-          </p>
-          <div id="hotkey-list"></div>
-          <span id="hotkey-status" class="status"></span>
+      <!-- ===================== Settings view ===================== -->
+      <div id="view-settings" class="view" hidden>
+        <div class="topbar">
+          <button class="back" id="back">‹ Zurück</button>
+          <div class="title">Einstellungen</div>
         </div>
 
-        <!-- Blitztext+ -->
-        <div class="section">
-          <div class="section-label">Blitztext+</div>
-          <div class="sub-label">Schreibstil</div>
-          <div class="segmented" id="tone-seg">
-            <button type="button" data-val="formal">Formell</button>
-            <button type="button" data-val="neutral">Neutral</button>
-            <button type="button" data-val="casual">Locker</button>
+        <div class="scroll">
+          <div class="tabs" id="tabs">
+            <button type="button" data-tab="customize" class="active">Anpassen</button>
+            <button type="button" data-tab="access">Zugang</button>
           </div>
-          <label for="improve-prompt">Eigene Anweisung</label>
-          <textarea id="improve-prompt" placeholder='z.B. "Schreibe prägnant und ohne Füllwörter."'></textarea>
-          <label for="improve-context">Kontext</label>
-          <input id="improve-context" placeholder='z.B. "E-Mails im Bereich Unternehmensberatung"' />
-        </div>
 
-        <!-- Blitztext $%&! -->
-        <div class="section">
-          <div class="section-label">Blitztext $%&!</div>
-          <label for="dampf-prompt">Eigene Anweisung</label>
-          <textarea id="dampf-prompt" placeholder='z.B. "Formuliere den Text sachlich und freundlich um."'></textarea>
-        </div>
-
-        <!-- Blitztext :) -->
-        <div class="section">
-          <div class="section-label">Blitztext :)</div>
-          <div class="sub-label">Emoji-Dichte</div>
-          <div class="segmented" id="density-seg">
-            <button type="button" data-val="wenig">Wenig</button>
-            <button type="button" data-val="mittel">Mittel</button>
-            <button type="button" data-val="viel">Viel</button>
-          </div>
-        </div>
-
-        <!-- Eigennamen -->
-        <div class="section">
-          <div class="section-label">Eigennamen</div>
-          <div id="terms-chips" class="chips"></div>
-          <div class="actions" style="margin-top: 0;">
-            <input id="term-input" placeholder="Neuer Begriff" />
-            <button type="button" id="term-add">Hinzufügen</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- ===================== Tab: Zugang ===================== -->
-      <div id="tab-access" class="settings tab-panel" hidden>
-        <form id="settings-form">
-          <div class="section" style="margin-top: 8px;">
-            <div class="section-label">Anbieter</div>
-            <div class="segmented" id="provider-seg">
-              <button type="button" data-val="liteLLM">LiteLLM Gateway</button>
-              <button type="button" data-val="openAI">OpenAI</button>
-            </div>
-
-            <div id="litellm-fields">
-              <label for="baseURL">Gateway-URL (ohne /v1)</label>
-              <input id="baseURL" placeholder="http://ai-gateway.intra.evia.de:4000" />
-
-              <label for="apiKey">API-Key <span id="key-status" class="status"></span></label>
-              <input
-                id="apiKey"
-                type="password"
-                placeholder="sk-...  (leer lassen, um den gespeicherten zu behalten)"
-              />
-
-              <label for="fastModel">Modell: Text verbessern / Emojis</label>
-              <input id="fastModel" placeholder="gpt-4o-mini" />
-
-              <label for="strongModel">Modell: Dampf ablassen</label>
-              <input id="strongModel" placeholder="gpt-5.5" />
-
-              <label for="transcriptionModel">Transkriptionsmodell</label>
-              <input id="transcriptionModel" placeholder="gpt-4o-transcribe" />
-            </div>
-
-            <div id="openai-fields" hidden>
-              <label for="openaiKey">OpenAI API Key <span id="openai-key-status" class="status"></span></label>
-              <input id="openaiKey" type="password" placeholder="sk-..." />
+          <!-- Tab: Anpassen -->
+          <div id="tab-customize" class="tab-panel">
+            <div class="section">
+              <div class="section-label">Tastenkürzel</div>
               <p class="hint">
-                Hinweis: In dieser Version ist nur das LiteLLM-Gateway voll
-                angebunden. OpenAI-Direktzugriff folgt.
+                Halten zum Aufnehmen, loslassen verarbeitet und fügt ein. Die
+                Windows-Taste (am Mac: Cmd) wirkt wie <code>fn</code> in der Mac-App.
+                Mindestens ein Zusatz-Modifier nötig.
               </p>
+              <div id="hotkey-list"></div>
+              <span id="hotkey-status" class="field-status"></span>
+              <div class="sub-label">Modus</div>
+              <div class="segmented" id="mode-seg">
+                <button type="button" class="seg" data-val="hold">Halten</button>
+                <button type="button" class="seg" data-val="toggle">Drücken</button>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-label">Blitztext+</div>
+              <div class="sub-label">Schreibstil</div>
+              <div class="segmented" id="tone-seg">
+                <button type="button" class="seg" data-val="formal">Formell</button>
+                <button type="button" class="seg" data-val="neutral">Neutral</button>
+                <button type="button" class="seg" data-val="casual">Locker</button>
+              </div>
+              <label for="improve-prompt">Eigene Anweisung</label>
+              <textarea id="improve-prompt" placeholder='z.B. "Schreibe prägnant und ohne Füllwörter."'></textarea>
+              <label for="improve-context">Kontext</label>
+              <input id="improve-context" placeholder='z.B. "E-Mails im Bereich Unternehmensberatung"' />
+            </div>
+
+            <div class="section">
+              <div class="section-label">Blitztext $%&!</div>
+              <label for="dampf-prompt">Eigene Anweisung</label>
+              <textarea id="dampf-prompt" placeholder='z.B. "Formuliere den Text sachlich und freundlich um."'></textarea>
+            </div>
+
+            <div class="section">
+              <div class="section-label">Blitztext :)</div>
+              <div class="sub-label">Emoji-Dichte</div>
+              <div class="segmented" id="density-seg">
+                <button type="button" class="seg" data-val="wenig">Wenig</button>
+                <button type="button" class="seg" data-val="mittel">Mittel</button>
+                <button type="button" class="seg" data-val="viel">Viel</button>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-label">Eigennamen</div>
+              <div id="terms-chips" class="chips"></div>
+              <div class="actions" style="margin-top: 0;">
+                <input id="term-input" placeholder="Neuer Begriff" />
+                <button type="button" id="term-add">Hinzufügen</button>
+              </div>
             </div>
           </div>
 
-          <div class="actions">
-            <button type="submit">Speichern</button>
-            <button type="button" id="test-btn">Verbindung testen</button>
-            <span id="save-status" class="status"></span>
-          </div>
-          <p id="test-result" class="status"></p>
-        </form>
+          <!-- Tab: Zugang -->
+          <div id="tab-access" class="tab-panel" hidden>
+            <form id="settings-form">
+              <div class="section" style="margin-top: 10px;">
+                <div class="section-label">Anbieter</div>
+                <div class="segmented" id="provider-seg">
+                  <button type="button" class="seg" data-val="liteLLM">LiteLLM Gateway</button>
+                  <button type="button" class="seg" data-val="openAI">OpenAI</button>
+                </div>
 
-        <div class="section">
-          <div class="section-label">Beim Anmelden</div>
-          <label class="switch-row">
-            <input type="checkbox" id="autostart" />
-            Blitztext automatisch starten
-          </label>
+                <div id="litellm-fields">
+                  <label for="baseURL">Gateway-URL (ohne /v1)</label>
+                  <input id="baseURL" placeholder="http://ai-gateway.intra.evia.de:4000" />
+
+                  <label for="apiKey">API-Key <span id="key-status" class="field-status"></span></label>
+                  <input id="apiKey" type="password" placeholder="sk-...  (leer lassen, um den gespeicherten zu behalten)" />
+
+                  <label for="fastModel">Modell: Text verbessern / Emojis</label>
+                  <input id="fastModel" placeholder="gpt-4o-mini" />
+
+                  <label for="strongModel">Modell: Dampf ablassen</label>
+                  <input id="strongModel" placeholder="gpt-5.5" />
+
+                  <label for="transcriptionModel">Transkriptionsmodell</label>
+                  <input id="transcriptionModel" placeholder="gpt-4o-transcribe" />
+                </div>
+
+                <div id="openai-fields" hidden>
+                  <label for="openaiKey">OpenAI API Key <span id="openai-key-status" class="field-status"></span></label>
+                  <input id="openaiKey" type="password" placeholder="sk-..." />
+                  <p class="hint">Hinweis: In dieser Version ist nur das LiteLLM-Gateway voll angebunden. OpenAI-Direktzugriff folgt.</p>
+                </div>
+              </div>
+
+              <div class="actions">
+                <button type="submit">Speichern</button>
+                <button type="button" id="test-btn">Verbindung testen</button>
+                <span id="save-status" class="field-status"></span>
+              </div>
+              <p id="test-result" class="field-status"></p>
+            </form>
+
+            <div class="section">
+              <div class="section-label">Beim Anmelden</div>
+              <label class="switch-row">
+                <input type="checkbox" id="autostart" />
+                Blitztext automatisch starten
+              </label>
+            </div>
+          </div>
         </div>
       </div>
-
-      <hr style="margin: 24px auto; max-width: 460px; opacity: 0.2;" />
-
-      <!-- ===================== Diktat testen ===================== -->
-      <section class="settings">
-        <h2 style="font-size: 16px;">Diktat testen</h2>
-        <div class="actions">
-          <button type="button" id="record-btn">Aufnahme starten</button>
-          <span id="record-status" class="status"></span>
-        </div>
-        <audio id="playback" controls style="width: 100%; max-width: 460px; margin-top: 8px;"></audio>
-        <p id="transcript"></p>
-      </section>
-    </main>
+    </div>
   </body>
 </html>

@@ -273,6 +273,52 @@ fn set_hotkey(
     Ok(())
 }
 
+// --- Windows & recording state ---------------------------------------------
+
+/// Tracks whether a dictation is currently recording, so a tray click can stop
+/// it instead of toggling the popover.
+#[derive(Default)]
+struct RecordingFlag(std::sync::atomic::AtomicBool);
+
+#[tauri::command]
+fn set_recording(state: tauri::State<'_, RecordingFlag>, active: bool) {
+    state
+        .0
+        .store(active, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// While true the popover stays open on focus loss (set when the settings view
+/// is showing, so editing fields doesn't dismiss the popover).
+#[derive(Default)]
+struct PopoverPinned(std::sync::atomic::AtomicBool);
+
+/// The tray icon's last known screen rect, captured from tray events, so the
+/// popover can be positioned right next to it (deterministic on the first open).
+#[derive(Default)]
+struct TrayRect(std::sync::Mutex<Option<tauri::Rect>>);
+
+#[tauri::command]
+fn set_popover_pinned(state: tauri::State<'_, PopoverPinned>, pinned: bool) {
+    state
+        .0
+        .store(pinned, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Hides the popover (used after a click-to-record so focus returns to the
+/// previously active app before pasting).
+#[tauri::command]
+fn hide_popover(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri::{Emitter, Manager};
@@ -306,6 +352,9 @@ pub fn run() {
                 .build(),
         )
         .manage(HotkeyMap::default())
+        .manage(RecordingFlag::default())
+        .manage(PopoverPinned::default())
+        .manage(TrayRect::default())
         .invoke_handler(tauri::generate_handler![
             secret_set,
             secret_get,
@@ -316,16 +365,32 @@ pub fn run() {
             set_hotkey,
             paste_text,
             set_autostart,
-            get_autostart
+            get_autostart,
+            set_recording,
+            set_popover_pinned,
+            hide_popover,
+            quit_app
         ])
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| match event {
             // Closing the window only hides it; the app keeps running in the
-            // tray so the global hotkey stays alive. "Beenden" in the tray menu
-            // is the real quit.
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            // tray so the global hotkey stays alive. "Beenden" is the real quit.
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 let _ = window.hide();
                 api.prevent_close();
             }
+            // The popover is transient: hide it on focus loss like a native
+            // menu-bar dropdown — unless pinned (settings view open).
+            tauri::WindowEvent::Focused(false) if window.label() == "main" => {
+                if !window
+                    .app_handle()
+                    .state::<PopoverPinned>()
+                    .0
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    let _ = window.hide();
+                }
+            }
+            _ => {}
         })
         .setup(|app| {
             // Hotkeys themselves are registered by the frontend from saved
@@ -337,31 +402,146 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// System-tray icon with a minimal menu (show window / quit). Lets the app keep
-/// running in the background so the global hotkey works while the window is
-/// hidden.
-fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    use tauri::menu::{Menu, MenuItem};
-    use tauri::tray::TrayIconBuilder;
-    use tauri::Manager;
+/// Positions the popover right next to the tray icon and shows it. All math is
+/// done in PHYSICAL pixels against the virtual desktop, and the target monitor
+/// is picked from the tray point, so it lands on the correct screen even with
+/// multiple monitors at different scale factors. Position is set BEFORE showing
+/// so the first open is already correct.
+fn show_popover(app: &tauri::AppHandle) {
+    use tauri::{Manager, PhysicalPosition};
 
-    let show = MenuItem::with_id(app, "show", "Fenster anzeigen", true, None::<&str>)?;
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    // The popover's logical size (kept in sync with tauri.conf.json).
+    const WIN_W: f64 = 380.0;
+    const WIN_H: f64 = 540.0;
+    const GAP: f64 = 6.0;
+
+    let win_scale = window.scale_factor().unwrap_or(1.0);
+    if let Some(rect) = app.state::<TrayRect>().0.lock().ok().and_then(|r| *r) {
+        // Tray rect in absolute physical coordinates (the value is already
+        // physical on the platforms we target; to_physical is a safe no-op then).
+        let pos = rect.position.to_physical::<f64>(win_scale);
+        let size = rect.size.to_physical::<f64>(win_scale);
+        let center_x = pos.x + size.width / 2.0;
+        let center_y = pos.y + size.height / 2.0;
+
+        // Find the monitor that contains the tray icon; fall back to the
+        // primary monitor (then the first) so we can always clamp on-screen.
+        let monitors = window.available_monitors().unwrap_or_default();
+        let monitor: Option<tauri::Monitor> = monitors
+            .iter()
+            .find(|m| {
+                let mp = m.position();
+                let ms = m.size();
+                center_x >= mp.x as f64
+                    && center_x < mp.x as f64 + ms.width as f64
+                    && center_y >= mp.y as f64
+                    && center_y < mp.y as f64 + ms.height as f64
+            })
+            .cloned()
+            .or_else(|| window.primary_monitor().ok().flatten())
+            .or_else(|| monitors.first().cloned());
+        let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(win_scale);
+
+        let win_w = WIN_W * scale;
+        let win_h = WIN_H * scale;
+        let gap = GAP * scale;
+
+        let mut x = center_x - win_w / 2.0;
+        // macOS tray sits at the top (drop below it); elsewhere at the bottom
+        // (rise above it).
+        #[cfg(target_os = "macos")]
+        let mut y = pos.y + size.height + gap;
+        #[cfg(not(target_os = "macos"))]
+        let mut y = pos.y - win_h - gap;
+
+        // Keep the popover fully inside the target monitor.
+        if let Some(m) = monitor {
+            let mp = m.position();
+            let ms = m.size();
+            let min_x = mp.x as f64;
+            let max_x = (mp.x as f64 + ms.width as f64 - win_w).max(min_x);
+            let min_y = mp.y as f64;
+            let max_y = (mp.y as f64 + ms.height as f64 - win_h).max(min_y);
+            x = x.clamp(min_x, max_x);
+            y = y.clamp(min_y, max_y);
+        }
+
+        let _ = window.set_position(PhysicalPosition::new(x, y));
+    }
+
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// System-tray icon. Left-click toggles the popover near the tray (or stops an
+/// active recording); right-click opens a small menu (settings / quit). Keeps
+/// the app alive in the background so the global hotkey works.
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use std::sync::atomic::Ordering;
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    use tauri::{Emitter, Manager};
+
+    let settings = MenuItem::with_id(app, "settings", "Einstellungen", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&settings, &quit])?;
+
+    // The monochrome Blitztext glyph (template on macOS so the menu bar tints it).
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
 
     TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(tray_icon)
+        .icon_as_template(true)
         .tooltip("Blitztext — Win+Shift+D halten zum Diktieren")
         .menu(&menu)
+        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+            "settings" => {
+                show_popover(app);
+                let _ = app.emit("open-settings", ());
             }
             "quit" => app.exit(0),
             _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            let app = tray.app_handle();
+            // Remember the icon's screen rect so show_popover can place itself.
+            let rect = match &event {
+                TrayIconEvent::Click { rect, .. } => Some(rect.clone()),
+                TrayIconEvent::Move { rect, .. } => Some(rect.clone()),
+                TrayIconEvent::Enter { rect, .. } => Some(rect.clone()),
+                _ => None,
+            };
+            if let Some(rect) = rect {
+                if let Ok(mut slot) = app.state::<TrayRect>().0.lock() {
+                    *slot = Some(rect);
+                }
+            }
+
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                // While recording, a tray click stops the dictation instead of
+                // toggling the popover.
+                if app.state::<RecordingFlag>().0.load(Ordering::SeqCst) {
+                    let _ = app.emit("popover-stop", ());
+                    return;
+                }
+                if let Some(window) = app.get_webview_window("main") {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = window.hide();
+                    } else {
+                        show_popover(app);
+                    }
+                }
+            }
         })
         .build(app)?;
     Ok(())
