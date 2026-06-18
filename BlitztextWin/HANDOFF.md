@@ -132,12 +132,50 @@ M1 (online-only):
    - **macOS caveat:** the synthetic keystroke needs Accessibility permission
      (System Settings → Privacy & Security → Accessibility) for the dev binary;
      Windows needs no prompt. First attempt may silently no-op until granted.
-8. ⬜ Wire the full workflow: record → transcribe → optional rewrite → paste,
-   with status. Add a `chat_complete` Rust command (POST `/v1/chat/completions`,
-   body `{model, messages, temperature?}`, **omit temperature for liteLLM**,
-   read `choices[0].message.content`). Add workflow modes
-   (transcribe / improve / Dampf ablassen / emoji) using `shared/prompts.json`.
+8. ✅ Full workflow: record → transcribe → optional rewrite → paste.
+   - `chat_complete(base_url, model, system, user)` Rust command (POST
+     `/v1/chat/completions`, temperature omitted, reads
+     `choices[0].message.content`).
+   - Four workflows (transcribe / improve / dampf / emoji), each with its own
+     configurable hotkey (defaults `Win+Shift+{D,I,A,E}`). The `hotkey-down`
+     event carries the workflow id; the webview tags the recording with it and,
+     on stop, runs the matching chat step (model: dampf → strongModel, else
+     fastModel) before pasting.
+   - Prompts come from `shared/prompts.json` via `src/prompts.ts`
+     (`systemPromptFor`); Vite `server.fs.allow: ['..']` permits the import.
+     MVP uses fixed defaults: neutral tone, medium emoji density, no custom
+     terms/context UI yet.
 9. ⬜ Verify on mac dev + on Windows.
+
+## Settings UI parity (matches the macOS two-tab layout)
+
+- Two-tab segmented layout like `SettingsContentView.swift`: **Anpassen** and
+  **Zugang**, with quiet uppercase section labels.
+- **Anpassen:** Tastenkürzel (4 workflows + capture/reset), Blitztext+
+  (Schreibstil Formell/Neutral/Locker · Eigene Anweisung · Kontext), Blitztext
+  $%&! (Eigene Anweisung), Blitztext :) (Emoji-Dichte Wenig/Mittel/Viel),
+  Eigennamen (chips + add). All saved immediately on change.
+- **Zugang:** Anbieter (LiteLLM/OpenAI segmented) + URL/Key/Modelle behind the
+  "Speichern" button; **Autostart** toggle ("Beim Anmelden").
+- These settings actually drive the prompts: `src/prompts.ts` `systemPromptFor`
+  assembles exactly like `LLMService.swift` `buildSystemPrompt` (custom
+  instruction overrides base+tone but keeps custom terms; context appended;
+  emoji density; dampf custom-or-default) from `shared/prompts.json`.
+- Autostart: `tauri-plugin-autostart` + `set_autostart`/`get_autostart` Rust
+  commands (LaunchAgent on macOS, Run key on Windows).
+- **Dropped (macOS-only):** Installation, Bedienungshilfen, Sauber Entfernen,
+  Sicherer Lokaler Modus (local Whisper is M3).
+
+## Open follow-ups (post-M1)
+
+- Hotkey capture vs. an active global shortcut: while recording a new combo, the
+  OS may swallow the keystroke if it equals a registered hotkey. Acceptable for
+  now; could unregister during capture.
+- Hold vs. toggle mode setting (Mac parity, deferred from the settings pass).
+- Verlauf / request-history tab (Mac has it; needs request logging).
+- OpenAI direct provider is not wired in Rust yet (gateway is the supported
+  path); the OpenAI key field stores a secret but requests still target liteLLM.
+- Window naming/product polish ("blitztextwin").
 
 M2 (parity/polish): four workflows, settings + request-history UI, NSIS installer,
 Windows Authenticode signing, optional auto-update; add `windows-release.yml`

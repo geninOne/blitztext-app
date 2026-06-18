@@ -26,5 +26,9 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+    // 4. allow importing the monorepo's shared/ folder (single source for prompts)
+    fs: {
+      allow: [".."],
+    },
   },
 }));

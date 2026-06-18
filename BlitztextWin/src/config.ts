@@ -1,9 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import promptData from "../../shared/prompts.json";
 
 export type ApiProvider = "openAI" | "liteLLM";
 
+export type TextTone = "formal" | "neutral" | "casual";
+export type EmojiDensity = "wenig" | "mittel" | "viel";
+
 export interface Settings {
   apiProvider: ApiProvider;
+  // Launch the app on login (Windows: registry Run key / macOS: LaunchAgent).
+  autostart: boolean;
   liteLLM: {
     baseURL: string;
     fastModel: string;
@@ -13,16 +19,46 @@ export interface Settings {
   // Global hotkeys per workflow, as accelerator strings (e.g. "Super+Shift+KeyD").
   // "Super" is the Windows key (= Cmd on the Mac dev machine). Key names follow
   // the W3C KeyboardEvent.code values, so the in-app recorder can store them 1:1.
-  hotkeys: {
-    transcribe: string;
+  hotkeys: Record<WorkflowType, string>;
+  // Per-workflow tuning, mirroring the macOS app's "Anpassen" tab.
+  improve: {
+    tone: TextTone;
+    systemPrompt: string; // custom instruction; overrides the default base prompt
+    context: string;
+    customTerms: string[];
+  };
+  dampf: {
+    systemPrompt: string; // custom instruction; overrides the default prompt
+  };
+  emoji: {
+    density: EmojiDensity;
   };
 }
+
+// The four dictation workflows, mirroring the macOS app.
+export type WorkflowType = "transcribe" | "improve" | "dampf" | "emoji";
+
+// UI labels and the macOS "Blitztext…" product names per workflow.
+export const workflowLabels: Record<WorkflowType, string> = {
+  transcribe: "Diktat",
+  improve: "Text verbessern",
+  dampf: "Dampf ablassen",
+  emoji: "Emojis",
+};
+
+export const workflowBrandNames: Record<WorkflowType, string> = {
+  transcribe: "Blitztext",
+  improve: "Blitztext+",
+  dampf: "Blitztext $%&!",
+  emoji: "Blitztext :)",
+};
 
 const SETTINGS_KEY = "blitztext.settings";
 export const LITELLM_KEY_ACCOUNT = "liteLLMApiKey";
 
 export const defaultSettings: Settings = {
   apiProvider: "liteLLM",
+  autostart: false,
   liteLLM: {
     baseURL: "",
     fastModel: "gpt-4o-mini",
@@ -31,6 +67,22 @@ export const defaultSettings: Settings = {
   },
   hotkeys: {
     transcribe: "Super+Shift+KeyD",
+    improve: "Super+Shift+KeyI",
+    dampf: "Super+Shift+KeyA",
+    emoji: "Super+Shift+KeyE",
+  },
+  improve: {
+    tone: "neutral",
+    systemPrompt: "",
+    context: "",
+    customTerms: [],
+  },
+  dampf: {
+    // Pre-filled with the default prompt (editable), exactly like the macOS app.
+    systemPrompt: promptData.dampfAblassen.default,
+  },
+  emoji: {
+    density: "mittel",
   },
 };
 
@@ -44,6 +96,9 @@ export function loadSettings(): Settings {
       ...parsed,
       liteLLM: { ...defaultSettings.liteLLM, ...(parsed.liteLLM ?? {}) },
       hotkeys: { ...defaultSettings.hotkeys, ...(parsed.hotkeys ?? {}) },
+      improve: { ...defaultSettings.improve, ...(parsed.improve ?? {}) },
+      dampf: { ...defaultSettings.dampf, ...(parsed.dampf ?? {}) },
+      emoji: { ...defaultSettings.emoji, ...(parsed.emoji ?? {}) },
     };
   } catch {
     return structuredClone(defaultSettings);

@@ -130,6 +130,66 @@ async fn transcribe(
     Ok(transcript.trim().to_string())
 }
 
+/// Runs a chat completion for the rewrite workflows (improve / Dampf ablassen /
+/// emoji). Temperature is intentionally omitted: the gateway's GPT-5 class
+/// models reject any non-default value with HTTP 400.
+#[tauri::command]
+async fn chat_complete(
+    base_url: String,
+    model: String,
+    system: String,
+    user: String,
+) -> Result<String, String> {
+    let key = litellm_key()?;
+    let url = format!("{}/v1/chat/completions", normalize_base(&base_url));
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
+    });
+
+    let response = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = response.status();
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status.as_u16(), text));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let content = parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or_else(|| "Antwort ohne content-Feld.".to_string())?;
+    Ok(content.trim().to_string())
+}
+
+// --- Autostart (launch on login) -------------------------------------------
+
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    }
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
 // --- Paste into the active app ---------------------------------------------
 
 /// Puts `text` on the clipboard and simulates the paste shortcut so it lands in
@@ -220,6 +280,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(
             // Hold-to-talk: the plugin reports both Pressed and Released, so we
             // emit a down/up pair the webview turns into start/stop recording.
@@ -248,8 +312,11 @@ pub fn run() {
             secret_has,
             gateway_test,
             transcribe,
+            chat_complete,
             set_hotkey,
-            paste_text
+            paste_text,
+            set_autostart,
+            get_autostart
         ])
         .on_window_event(|window, event| {
             // Closing the window only hides it; the app keeps running in the

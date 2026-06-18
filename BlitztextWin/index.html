@@ -7,12 +7,67 @@
     <title>Blitztext</title>
     <script type="module" src="/src/main.ts" defer></script>
     <style>
-      .settings { max-width: 440px; margin: 0 auto; text-align: left; }
+      .settings { max-width: 460px; margin: 0 auto; text-align: left; }
       .settings label { display: block; margin: 12px 0 4px; font-size: 13px; font-weight: 600; }
-      .settings input, .settings select { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px; }
+      .settings input, .settings select, .settings textarea {
+        width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px;
+        font: inherit;
+      }
+      .settings textarea { resize: vertical; min-height: 60px; }
       .subtitle { opacity: 0.7; margin-top: 0; }
       .status { margin-left: 8px; opacity: 0.8; font-size: 12px; font-weight: 400; }
-      .actions { margin-top: 18px; display: flex; align-items: center; gap: 4px; }
+      .actions { margin-top: 14px; display: flex; align-items: center; gap: 6px; }
+
+      /* Two-tab segmented control (top) */
+      .tabs {
+        max-width: 460px; margin: 0 auto 8px; display: flex; gap: 0;
+        border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 8px; overflow: hidden;
+      }
+      .tabs button {
+        flex: 1; padding: 7px 0; border: none; background: transparent; cursor: pointer;
+        font: inherit; font-size: 13px; font-weight: 600; opacity: 0.7;
+      }
+      .tabs button.active { background: rgba(128, 128, 128, 0.18); opacity: 1; }
+
+      /* Quiet section label (uppercase, small, grey) */
+      .section { margin-top: 22px; }
+      .section-label {
+        font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+        text-transform: uppercase; opacity: 0.55; margin-bottom: 8px;
+      }
+      .hint { font-size: 11px; opacity: 0.65; margin: 0 0 8px; }
+      .sub-label { font-size: 12px; opacity: 0.7; margin: 10px 0 4px; }
+
+      /* Inline segmented control (tone / density / provider) */
+      .segmented {
+        display: flex; border: 1px solid rgba(128, 128, 128, 0.3);
+        border-radius: 7px; overflow: hidden;
+      }
+      .segmented button {
+        flex: 1; padding: 6px 0; border: none; background: transparent; cursor: pointer;
+        font: inherit; font-size: 12px; opacity: 0.7;
+        border-left: 1px solid rgba(128, 128, 128, 0.2);
+      }
+      .segmented button:first-child { border-left: none; }
+      .segmented button.active { background: rgba(128, 128, 128, 0.2); opacity: 1; font-weight: 600; }
+
+      /* Hotkey rows */
+      .hotkey-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+      .hotkey-row .wf-label { min-width: 120px; font-weight: 600; font-size: 13px; }
+      kbd { padding: 4px 8px; border: 1px solid currentColor; border-radius: 6px; opacity: 0.85; font-size: 12px; }
+
+      /* Custom-term chips */
+      .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+      .chip {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 3px 8px; border-radius: 999px;
+        border: 1px solid rgba(128, 128, 128, 0.25); background: rgba(128, 128, 128, 0.1);
+        font-size: 12px;
+      }
+      .chip button { border: none; background: transparent; cursor: pointer; opacity: 0.6; font: inherit; padding: 0; }
+
+      .switch-row { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+      .switch-row input { width: auto; }
     </style>
   </head>
 
@@ -21,68 +76,137 @@
       <h1>Blitztext</h1>
       <p class="subtitle">Einstellungen</p>
 
-      <form id="settings-form" class="settings">
-        <label for="provider">Anbieter</label>
-        <select id="provider">
-          <option value="liteLLM">LiteLLM Gateway</option>
-          <option value="openAI">OpenAI</option>
-        </select>
+      <div class="tabs" id="tabs">
+        <button type="button" data-tab="customize" class="active">Anpassen</button>
+        <button type="button" data-tab="access">Zugang</button>
+      </div>
 
-        <div id="litellm-fields">
-          <label for="baseURL">Gateway-URL (ohne /v1)</label>
-          <input id="baseURL" placeholder="http://ai-gateway.intra.evia.de:4000" />
-
-          <label for="apiKey">API-Key <span id="key-status" class="status"></span></label>
-          <input
-            id="apiKey"
-            type="password"
-            placeholder="sk-...  (leer lassen, um den gespeicherten zu behalten)"
-          />
-
-          <label for="fastModel">Modell: Text verbessern / Emojis</label>
-          <input id="fastModel" placeholder="gpt-4o-mini" />
-
-          <label for="strongModel">Modell: Dampf ablassen</label>
-          <input id="strongModel" placeholder="gpt-5.5" />
-
-          <label for="transcriptionModel">Transkriptionsmodell</label>
-          <input id="transcriptionModel" placeholder="gpt-4o-transcribe" />
-        </div>
-
-        <div class="actions">
-          <button type="submit">Speichern</button>
-          <button type="button" id="test-btn">Verbindung testen</button>
-          <span id="save-status" class="status"></span>
-        </div>
-        <p id="test-result" class="status"></p>
-      </form>
-
-      <hr style="margin: 24px auto; max-width: 440px; opacity: 0.2;" />
-
-      <section class="settings">
-        <h2 style="font-size: 16px;">Tastenkürzel</h2>
-        <label>Diktat (halten zum Aufnehmen)</label>
-        <div class="actions">
-          <kbd id="hotkey-transcribe" style="padding: 4px 8px; border: 1px solid currentColor; border-radius: 6px; opacity: 0.85;"></kbd>
-          <button type="button" id="hotkey-record-btn">Ändern</button>
-          <button type="button" id="hotkey-reset-btn">Zurücksetzen</button>
+      <!-- ===================== Tab: Anpassen ===================== -->
+      <div id="tab-customize" class="settings tab-panel">
+        <!-- Tastenkürzel -->
+        <div class="section">
+          <div class="section-label">Tastenkürzel</div>
+          <p class="hint">
+            Halten zum Aufnehmen, loslassen verarbeitet und fügt ein. Die
+            Windows-Taste (am Mac: Cmd) wirkt wie <code>fn</code> in der Mac-App.
+            Mindestens ein Zusatz-Modifier nötig.
+          </p>
+          <div id="hotkey-list"></div>
           <span id="hotkey-status" class="status"></span>
         </div>
-        <p class="status" style="margin-top: 6px;">
-          Die Windows-Taste (am Mac: Cmd) wirkt wie <code>fn</code> in der Mac-App.
-          Mindestens ein Zusatz-Modifier nötig.
-        </p>
-      </section>
 
-      <hr style="margin: 24px auto; max-width: 440px; opacity: 0.2;" />
+        <!-- Blitztext+ -->
+        <div class="section">
+          <div class="section-label">Blitztext+</div>
+          <div class="sub-label">Schreibstil</div>
+          <div class="segmented" id="tone-seg">
+            <button type="button" data-val="formal">Formell</button>
+            <button type="button" data-val="neutral">Neutral</button>
+            <button type="button" data-val="casual">Locker</button>
+          </div>
+          <label for="improve-prompt">Eigene Anweisung</label>
+          <textarea id="improve-prompt" placeholder='z.B. "Schreibe prägnant und ohne Füllwörter."'></textarea>
+          <label for="improve-context">Kontext</label>
+          <input id="improve-context" placeholder='z.B. "E-Mails im Bereich Unternehmensberatung"' />
+        </div>
 
+        <!-- Blitztext $%&! -->
+        <div class="section">
+          <div class="section-label">Blitztext $%&!</div>
+          <label for="dampf-prompt">Eigene Anweisung</label>
+          <textarea id="dampf-prompt" placeholder='z.B. "Formuliere den Text sachlich und freundlich um."'></textarea>
+        </div>
+
+        <!-- Blitztext :) -->
+        <div class="section">
+          <div class="section-label">Blitztext :)</div>
+          <div class="sub-label">Emoji-Dichte</div>
+          <div class="segmented" id="density-seg">
+            <button type="button" data-val="wenig">Wenig</button>
+            <button type="button" data-val="mittel">Mittel</button>
+            <button type="button" data-val="viel">Viel</button>
+          </div>
+        </div>
+
+        <!-- Eigennamen -->
+        <div class="section">
+          <div class="section-label">Eigennamen</div>
+          <div id="terms-chips" class="chips"></div>
+          <div class="actions" style="margin-top: 0;">
+            <input id="term-input" placeholder="Neuer Begriff" />
+            <button type="button" id="term-add">Hinzufügen</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== Tab: Zugang ===================== -->
+      <div id="tab-access" class="settings tab-panel" hidden>
+        <form id="settings-form">
+          <div class="section" style="margin-top: 8px;">
+            <div class="section-label">Anbieter</div>
+            <div class="segmented" id="provider-seg">
+              <button type="button" data-val="liteLLM">LiteLLM Gateway</button>
+              <button type="button" data-val="openAI">OpenAI</button>
+            </div>
+
+            <div id="litellm-fields">
+              <label for="baseURL">Gateway-URL (ohne /v1)</label>
+              <input id="baseURL" placeholder="http://ai-gateway.intra.evia.de:4000" />
+
+              <label for="apiKey">API-Key <span id="key-status" class="status"></span></label>
+              <input
+                id="apiKey"
+                type="password"
+                placeholder="sk-...  (leer lassen, um den gespeicherten zu behalten)"
+              />
+
+              <label for="fastModel">Modell: Text verbessern / Emojis</label>
+              <input id="fastModel" placeholder="gpt-4o-mini" />
+
+              <label for="strongModel">Modell: Dampf ablassen</label>
+              <input id="strongModel" placeholder="gpt-5.5" />
+
+              <label for="transcriptionModel">Transkriptionsmodell</label>
+              <input id="transcriptionModel" placeholder="gpt-4o-transcribe" />
+            </div>
+
+            <div id="openai-fields" hidden>
+              <label for="openaiKey">OpenAI API Key <span id="openai-key-status" class="status"></span></label>
+              <input id="openaiKey" type="password" placeholder="sk-..." />
+              <p class="hint">
+                Hinweis: In dieser Version ist nur das LiteLLM-Gateway voll
+                angebunden. OpenAI-Direktzugriff folgt.
+              </p>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button type="submit">Speichern</button>
+            <button type="button" id="test-btn">Verbindung testen</button>
+            <span id="save-status" class="status"></span>
+          </div>
+          <p id="test-result" class="status"></p>
+        </form>
+
+        <div class="section">
+          <div class="section-label">Beim Anmelden</div>
+          <label class="switch-row">
+            <input type="checkbox" id="autostart" />
+            Blitztext automatisch starten
+          </label>
+        </div>
+      </div>
+
+      <hr style="margin: 24px auto; max-width: 460px; opacity: 0.2;" />
+
+      <!-- ===================== Diktat testen ===================== -->
       <section class="settings">
         <h2 style="font-size: 16px;">Diktat testen</h2>
         <div class="actions">
           <button type="button" id="record-btn">Aufnahme starten</button>
           <span id="record-status" class="status"></span>
         </div>
-        <audio id="playback" controls style="width: 100%; max-width: 440px; margin-top: 8px;"></audio>
+        <audio id="playback" controls style="width: 100%; max-width: 460px; margin-top: 8px;"></audio>
         <p id="transcript"></p>
       </section>
     </main>

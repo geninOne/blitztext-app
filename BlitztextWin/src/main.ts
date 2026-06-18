@@ -7,8 +7,15 @@ import {
   setSecret,
   hasSecret,
   LITELLM_KEY_ACCOUNT,
+  workflowLabels,
   type Settings,
+  type WorkflowType,
+  type TextTone,
+  type EmojiDensity,
 } from "./config";
+import { systemPromptFor } from "./prompts";
+
+const OPENAI_KEY_ACCOUNT = "openAIApiKey";
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
@@ -41,50 +48,84 @@ function extForMime(mime: string): string {
   return "webm";
 }
 
-function applyProviderVisibility(provider: string): void {
-  el("litellm-fields").style.display = provider === "liteLLM" ? "block" : "none";
+// Wire an inline segmented control: highlights the active button and reports
+// selections. Buttons carry their value in data-val.
+function setupSegmented(
+  containerId: string,
+  current: string,
+  onSelect: (value: string) => void,
+): void {
+  const buttons = Array.from(
+    el(containerId).querySelectorAll<HTMLButtonElement>("button"),
+  );
+  const render = (value: string) =>
+    buttons.forEach((b) => b.classList.toggle("active", b.dataset.val === value));
+  buttons.forEach((b) =>
+    b.addEventListener("click", () => {
+      render(b.dataset.val!);
+      onSelect(b.dataset.val!);
+    }),
+  );
+  render(current);
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
-  const provider = el<HTMLSelectElement>("provider");
+  const settings = loadSettings();
+  const persist = () => saveSettings(settings);
+
+  // --- Tabs (Anpassen / Zugang) ---
+  const tabButtons = Array.from(el("tabs").querySelectorAll<HTMLButtonElement>("button"));
+  function showTab(name: string): void {
+    tabButtons.forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+    el("tab-customize").hidden = name !== "customize";
+    el("tab-access").hidden = name !== "access";
+  }
+  tabButtons.forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab!)));
+  // Open on "Zugang" until the gateway is configured, otherwise "Anpassen".
+  showTab(settings.liteLLM.baseURL ? "customize" : "access");
+
+  // --- Access tab: provider + credentials + models ---
   const baseURL = el<HTMLInputElement>("baseURL");
   const fastModel = el<HTMLInputElement>("fastModel");
   const strongModel = el<HTMLInputElement>("strongModel");
   const transcriptionModel = el<HTMLInputElement>("transcriptionModel");
   const apiKey = el<HTMLInputElement>("apiKey");
+  const openaiKey = el<HTMLInputElement>("openaiKey");
   const keyStatus = el("key-status");
   const saveStatus = el("save-status");
 
-  const settings = loadSettings();
-  provider.value = settings.apiProvider;
   baseURL.value = settings.liteLLM.baseURL;
   fastModel.value = settings.liteLLM.fastModel;
   strongModel.value = settings.liteLLM.strongModel;
   transcriptionModel.value = settings.liteLLM.transcriptionModel;
+
+  function applyProviderVisibility(provider: string): void {
+    el("litellm-fields").hidden = provider !== "liteLLM";
+    el("openai-fields").hidden = provider !== "openAI";
+  }
+  setupSegmented("provider-seg", settings.apiProvider, (value) => {
+    settings.apiProvider = value as Settings["apiProvider"];
+    applyProviderVisibility(value);
+    persist();
+  });
   applyProviderVisibility(settings.apiProvider);
 
   keyStatus.textContent = (await hasSecret(LITELLM_KEY_ACCOUNT))
     ? "Key gespeichert"
     : "kein Key gespeichert";
 
-  provider.addEventListener("change", () => applyProviderVisibility(provider.value));
-
   el("settings-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     saveStatus.textContent = "";
 
-    const next: Settings = {
-      apiProvider: provider.value as Settings["apiProvider"],
-      liteLLM: {
-        baseURL: baseURL.value.trim(),
-        fastModel: fastModel.value.trim() || defaultSettings.liteLLM.fastModel,
-        strongModel: strongModel.value.trim() || defaultSettings.liteLLM.strongModel,
-        transcriptionModel:
-          transcriptionModel.value.trim() || defaultSettings.liteLLM.transcriptionModel,
-      },
-      hotkeys: settings.hotkeys,
+    settings.liteLLM = {
+      baseURL: baseURL.value.trim(),
+      fastModel: fastModel.value.trim() || defaultSettings.liteLLM.fastModel,
+      strongModel: strongModel.value.trim() || defaultSettings.liteLLM.strongModel,
+      transcriptionModel:
+        transcriptionModel.value.trim() || defaultSettings.liteLLM.transcriptionModel,
     };
-    saveSettings(next);
+    persist();
 
     const key = apiKey.value.trim();
     if (key) {
@@ -92,6 +133,17 @@ window.addEventListener("DOMContentLoaded", async () => {
         await setSecret(LITELLM_KEY_ACCOUNT, key);
         apiKey.value = "";
         keyStatus.textContent = "Key gespeichert";
+      } catch (error) {
+        saveStatus.textContent = `Key-Fehler: ${error}`;
+        return;
+      }
+    }
+
+    const oaKey = openaiKey.value.trim();
+    if (oaKey) {
+      try {
+        await setSecret(OPENAI_KEY_ACCOUNT, oaKey);
+        openaiKey.value = "";
       } catch (error) {
         saveStatus.textContent = `Key-Fehler: ${error}`;
         return;
@@ -131,11 +183,98 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // --- Dictation: record -> transcribe -> show text ---
-  // Driven by the record button (toggle) and the global push-to-talk hotkey
-  // (Win+Shift+D): hotkey down = start, up = stop.
+  // --- Access tab: autostart (launch on login) ---
+  const autostartEl = el<HTMLInputElement>("autostart");
+  try {
+    autostartEl.checked = await invoke<boolean>("get_autostart");
+  } catch {
+    autostartEl.checked = settings.autostart;
+  }
+  autostartEl.addEventListener("change", async () => {
+    try {
+      await invoke("set_autostart", { enabled: autostartEl.checked });
+      settings.autostart = autostartEl.checked;
+      persist();
+    } catch (error) {
+      autostartEl.checked = !autostartEl.checked; // revert on failure
+      saveStatus.textContent = `Autostart-Fehler: ${error}`;
+    }
+  });
+
+  // --- Customize tab: per-workflow tuning (saved immediately on change) ---
+  setupSegmented("tone-seg", settings.improve.tone, (value) => {
+    settings.improve.tone = value as TextTone;
+    persist();
+  });
+  setupSegmented("density-seg", settings.emoji.density, (value) => {
+    settings.emoji.density = value as EmojiDensity;
+    persist();
+  });
+
+  const improvePrompt = el<HTMLTextAreaElement>("improve-prompt");
+  const improveContext = el<HTMLInputElement>("improve-context");
+  const dampfPrompt = el<HTMLTextAreaElement>("dampf-prompt");
+  improvePrompt.value = settings.improve.systemPrompt;
+  improveContext.value = settings.improve.context;
+  dampfPrompt.value = settings.dampf.systemPrompt;
+  improvePrompt.addEventListener("input", () => {
+    settings.improve.systemPrompt = improvePrompt.value;
+    persist();
+  });
+  improveContext.addEventListener("input", () => {
+    settings.improve.context = improveContext.value;
+    persist();
+  });
+  dampfPrompt.addEventListener("input", () => {
+    settings.dampf.systemPrompt = dampfPrompt.value;
+    persist();
+  });
+
+  // Custom-term chips
+  const termsChips = el("terms-chips");
+  const termInput = el<HTMLInputElement>("term-input");
+  function renderTerms(): void {
+    termsChips.innerHTML = "";
+    for (const term of settings.improve.customTerms) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      const label = document.createElement("span");
+      label.textContent = term;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "✕";
+      remove.addEventListener("click", () => {
+        settings.improve.customTerms = settings.improve.customTerms.filter((t) => t !== term);
+        persist();
+        renderTerms();
+      });
+      chip.append(label, remove);
+      termsChips.append(chip);
+    }
+  }
+  function addTerm(): void {
+    const value = termInput.value.trim();
+    if (!value || settings.improve.customTerms.includes(value)) return;
+    settings.improve.customTerms.push(value);
+    termInput.value = "";
+    persist();
+    renderTerms();
+  }
+  el<HTMLButtonElement>("term-add").addEventListener("click", addTerm);
+  termInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addTerm();
+    }
+  });
+  renderTerms();
+
+  // --- Dictation: record -> transcribe -> optional rewrite -> paste ---
+  // Driven by the record button (toggle) and the global push-to-talk hotkeys:
+  // hotkey down = start, up = stop. The workflow id chooses the chat step.
   let mediaRecorder: MediaRecorder | null = null;
   let chunks: Blob[] = [];
+  let currentWorkflow: WorkflowType = "transcribe";
   const recordBtn = el<HTMLButtonElement>("record-btn");
   const recordStatus = el("record-status");
   const transcriptEl = el("transcript");
@@ -174,19 +313,38 @@ window.addEventListener("DOMContentLoaded", async () => {
           const bytes = new Uint8Array(await blob.arrayBuffer());
           recordStatus.textContent = `Transkribiere (${baseMime}, ${bytes.length} Bytes) ...`;
           const text = await invoke<string>("transcribe", {
-            baseUrl: baseURL.value.trim(),
-            model: transcriptionModel.value.trim() || "gpt-4o-transcribe",
+            baseUrl: settings.liteLLM.baseURL.trim(),
+            model: settings.liteLLM.transcriptionModel.trim() || "gpt-4o-transcribe",
             language: "de",
             audioBase64: toBase64(bytes),
             filename: `audio.${extForMime(mime)}`,
             contentType: baseMime,
           });
-          transcriptEl.textContent = text || "(leer)";
+
+          // For rewrite workflows, run the transcript through the chat model
+          // with the matching system prompt. Plain transcription skips this.
+          let result = text;
+          const system = systemPromptFor(currentWorkflow, settings);
+          if (system && text) {
+            const model =
+              currentWorkflow === "dampf"
+                ? settings.liteLLM.strongModel.trim() || defaultSettings.liteLLM.strongModel
+                : settings.liteLLM.fastModel.trim() || defaultSettings.liteLLM.fastModel;
+            recordStatus.textContent = `Verarbeite (${workflowLabels[currentWorkflow]}) ...`;
+            result = await invoke<string>("chat_complete", {
+              baseUrl: settings.liteLLM.baseURL.trim(),
+              model,
+              system,
+              user: text,
+            });
+          }
+
+          transcriptEl.textContent = result || "(leer)";
           recordStatus.textContent = "";
-          // Paste the transcript into whatever app currently has focus.
-          if (text) {
+          // Paste the result into whatever app currently has focus.
+          if (result) {
             try {
-              await invoke("paste_text", { text });
+              await invoke("paste_text", { text: result });
             } catch (error) {
               recordStatus.textContent = `Einfügen fehlgeschlagen: ${error}`;
             }
@@ -213,21 +371,27 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (mediaRecorder && mediaRecorder.state === "recording") {
       stopRecording();
     } else {
+      currentWorkflow = "transcribe";
       void startRecording();
     }
   });
 
-  // Global push-to-talk hotkey, registered in Rust. Hold the combo to record.
-  // Pressed may repeat while held; startRecording() ignores re-entry.
-  await listen("hotkey-down", () => void startRecording());
+  // Global push-to-talk hotkeys, registered in Rust. The down event carries the
+  // workflow id; hold to record. Pressed may repeat while held; startRecording()
+  // ignores re-entry.
+  await listen<string>("hotkey-down", (event) => {
+    currentWorkflow = (event.payload as WorkflowType) || "transcribe";
+    void startRecording();
+  });
   await listen("hotkey-up", () => stopRecording());
 
-  // --- Configurable hotkeys ---
-  const hotkeyDisplay = el("hotkey-transcribe");
-  const hotkeyBtn = el<HTMLButtonElement>("hotkey-record-btn");
-  const hotkeyResetBtn = el<HTMLButtonElement>("hotkey-reset-btn");
+  // --- Configurable hotkeys (one per workflow) ---
   const hotkeyStatus = el("hotkey-status");
-  let capturing = false;
+  const hotkeyList = el("hotkey-list");
+  const displays = {} as Record<WorkflowType, HTMLElement>;
+  const changeButtons = {} as Record<WorkflowType, HTMLButtonElement>;
+  let capturingWorkflow: WorkflowType | null = null;
+  const workflowOrder: WorkflowType[] = ["transcribe", "improve", "dampf", "emoji"];
 
   // Accelerator strings use W3C KeyboardEvent.code names ("Super+Shift+KeyD").
   // Render them human-readably (Win + Shift + D) for the UI.
@@ -257,61 +421,83 @@ window.addEventListener("DOMContentLoaded", async () => {
     return [...mods, event.code].join("+");
   }
 
-  function renderHotkey(): void {
-    hotkeyDisplay.textContent = formatAccel(settings.hotkeys.transcribe);
+  function renderHotkey(workflow: WorkflowType): void {
+    displays[workflow].textContent = formatAccel(settings.hotkeys[workflow]);
   }
 
-  async function applyHotkey(accel: string): Promise<void> {
+  async function applyHotkey(workflow: WorkflowType, accel: string): Promise<void> {
     try {
-      await invoke("set_hotkey", { workflow: "transcribe", accelerator: accel });
-      settings.hotkeys.transcribe = accel;
-      saveSettings(settings);
-      renderHotkey();
-      hotkeyStatus.textContent = "Hotkey gespeichert";
+      await invoke("set_hotkey", { workflow, accelerator: accel });
+      settings.hotkeys[workflow] = accel;
+      persist();
+      renderHotkey(workflow);
+      hotkeyStatus.textContent = `${workflowLabels[workflow]}: gespeichert`;
       setTimeout(() => (hotkeyStatus.textContent = ""), 2000);
     } catch (error) {
       hotkeyStatus.textContent = `Fehler: ${error}`;
     }
   }
 
-  function stopCapture(message: string): void {
-    capturing = false;
-    hotkeyBtn.textContent = "Ändern";
+  function endCapture(message: string): void {
+    if (capturingWorkflow) changeButtons[capturingWorkflow].textContent = "Ändern";
+    capturingWorkflow = null;
     hotkeyStatus.textContent = message;
   }
 
-  hotkeyBtn.addEventListener("click", () => {
-    if (capturing) return;
-    capturing = true;
-    hotkeyBtn.textContent = "Tasten drücken ...";
-    hotkeyStatus.textContent = "Wunschkombination drücken (Esc bricht ab).";
-  });
+  for (const workflow of workflowOrder) {
+    const row = document.createElement("div");
+    row.className = "hotkey-row";
 
-  hotkeyResetBtn.addEventListener("click", () => {
-    void applyHotkey(defaultSettings.hotkeys.transcribe);
-  });
+    const label = document.createElement("span");
+    label.className = "wf-label";
+    label.textContent = workflowLabels[workflow];
+
+    const display = document.createElement("kbd");
+    displays[workflow] = display;
+
+    const changeBtn = document.createElement("button");
+    changeBtn.type = "button";
+    changeBtn.textContent = "Ändern";
+    changeButtons[workflow] = changeBtn;
+    changeBtn.addEventListener("click", () => {
+      if (capturingWorkflow) endCapture("");
+      capturingWorkflow = workflow;
+      changeBtn.textContent = "Tasten drücken ...";
+      hotkeyStatus.textContent = `${workflowLabels[workflow]}: Kombination drücken (Esc bricht ab).`;
+    });
+
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.textContent = "Zurücksetzen";
+    resetBtn.addEventListener("click", () =>
+      void applyHotkey(workflow, defaultSettings.hotkeys[workflow]),
+    );
+
+    row.append(label, display, changeBtn, resetBtn);
+    hotkeyList.append(row);
+    renderHotkey(workflow);
+  }
 
   window.addEventListener("keydown", (event) => {
-    if (!capturing) return;
+    if (!capturingWorkflow) return;
     event.preventDefault();
     if (event.code === "Escape") {
-      stopCapture("Abgebrochen");
+      endCapture("Abgebrochen");
       return;
     }
     const accel = accelFromEvent(event);
     if (!accel) return; // wait until a real key is pressed with a modifier held
-    stopCapture("");
-    void applyHotkey(accel);
+    const workflow = capturingWorkflow;
+    endCapture("");
+    void applyHotkey(workflow, accel);
   });
 
-  renderHotkey();
-  // Register the saved hotkey now that the webview is up.
-  try {
-    await invoke("set_hotkey", {
-      workflow: "transcribe",
-      accelerator: settings.hotkeys.transcribe,
-    });
-  } catch (error) {
-    hotkeyStatus.textContent = `Hotkey-Fehler: ${error}`;
+  // Register all saved hotkeys now that the webview is up.
+  for (const workflow of workflowOrder) {
+    try {
+      await invoke("set_hotkey", { workflow, accelerator: settings.hotkeys[workflow] });
+    } catch (error) {
+      hotkeyStatus.textContent = `${workflowLabels[workflow]}: ${error}`;
+    }
   }
 });
