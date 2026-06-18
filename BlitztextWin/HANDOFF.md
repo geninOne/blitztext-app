@@ -74,21 +74,22 @@ Frontend (`src/main.ts`, `src/config.ts`, `index.html`):
   content-type to the real `MediaRecorder` mime type, which on macOS WKWebView is
   typically `audio/mp4`).
 
-## Audio quality (resolved enough for MVP)
+## Audio: native recording (cpal -> WAV)
 
-- The earlier "bescheiden"/hallucination problem was mostly the `getUserMedia`
-  processing filters fighting a mediocre signal. **Fix applied:** turned
-  `echoCancellation` / `noiseSuppression` / `autoGainControl` **off** (raw signal
-  is better for dictation), kept mono + `audioBitsPerSecond: 128000`. Recording
-  still follows the OS default input device (no `deviceId`) — user sets the
-  headset as the macOS default in System Settings → Sound → Input.
-- Mono is intentional; the "voice only in the left ear" the user noticed is a
-  harmless playback artifact of a single-channel file, not a capture problem.
-- **Fallback still on the table if Windows audio turns out poor:** switch
-  recording to Rust `cpal` → WAV (the `transcribe` command already accepts
-  `content_type`/`filename`). cpal `Stream` is `!Send`: use a dedicated thread
-  owning the stream, an `Arc<Mutex<Vec<f32>>>` buffer + `AtomicBool` stop flag,
-  write WAV with `hound`. Not needed unless WebView2 audio disappoints.
+- WebView `MediaRecorder` audio on Windows was worse than the macOS app (which
+  records native AAC 16 kHz mono via AVAudioRecorder). Recording now happens in
+  the Rust core for deterministic quality, matching the Mac.
+- `record_start` / `record_stop` commands (`AudioRecorder` state). cpal's
+  `Stream` is `!Send`, so it's created and kept alive on a dedicated thread; the
+  input callback downmixes to mono and pushes `i16` into a shared buffer
+  (handles F32/I16/U16 formats). `record_stop` joins the thread and returns a
+  16-bit PCM mono WAV (at the device sample rate) as base64 via `hound`.
+- The webview no longer touches the mic; `popover.ts` calls `record_start` on
+  start and `record_stop` on stop, then feeds the base64 WAV to `transcribe`
+  (`audio/wav`). Deps: `cpal`, `hound`.
+- macOS needs the mic usage description (`src-tauri/Info.plist`,
+  NSMicrophoneUsageDescription); first capture prompts. Windows: OS mic privacy
+  setting must allow desktop apps.
 
 ## Hotkey decision (step 6)
 

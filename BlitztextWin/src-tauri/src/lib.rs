@@ -177,6 +177,198 @@ async fn chat_complete(
     Ok(content.trim().to_string())
 }
 
+// --- Native audio recording (cpal -> WAV) ----------------------------------
+//
+// Recording happens in the Rust core instead of the webview's MediaRecorder so
+// the audio quality is deterministic and matches the macOS app (16-bit PCM mono
+// WAV). cpal's Stream is !Send, so it is created and kept alive on a dedicated
+// thread; the input callback pushes mono i16 samples into a shared buffer.
+
+#[derive(Default)]
+struct AudioRecorder {
+    inner: std::sync::Mutex<Option<RecorderHandle>>,
+}
+
+struct RecorderHandle {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    join: std::thread::JoinHandle<()>,
+    samples: std::sync::Arc<std::sync::Mutex<Vec<i16>>>,
+    sample_rate: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+/// Starts capturing from the default input device. Returns once the stream is
+/// running (or with the device/stream error).
+#[tauri::command]
+fn record_start(state: tauri::State<'_, AudioRecorder>) -> Result<(), String> {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let mut guard = state.inner.lock().map_err(|e| e.to_string())?;
+    if guard.is_some() {
+        return Ok(()); // already recording
+    }
+
+    let samples = Arc::new(Mutex::new(Vec::<i16>::new()));
+    let sample_rate = Arc::new(AtomicU32::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+
+    let t_samples = samples.clone();
+    let t_sr = sample_rate.clone();
+    let t_stop = stop.clone();
+
+    let join = std::thread::spawn(move || {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+        let host = cpal::default_host();
+        let Some(device) = host.default_input_device() else {
+            let _ = ready_tx.send(Err("Kein Mikrofon gefunden.".into()));
+            return;
+        };
+        let supported = match device.default_input_config() {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = ready_tx.send(Err(format!("Audio-Konfiguration: {e}")));
+                return;
+            }
+        };
+        let channels = supported.channels() as usize;
+        t_sr.store(supported.sample_rate().0, Ordering::SeqCst);
+        let config: cpal::StreamConfig = supported.config();
+        let err_fn = |err| eprintln!("Audio-Stream-Fehler: {err}");
+
+        // Downmix interleaved frames to one mono i16 sample.
+        let build = || -> Result<cpal::Stream, cpal::BuildStreamError> {
+            match supported.sample_format() {
+                cpal::SampleFormat::F32 => {
+                    let buf = t_samples.clone();
+                    device.build_input_stream(
+                        &config,
+                        move |data: &[f32], _: &_| {
+                            let mut b = buf.lock().unwrap();
+                            for frame in data.chunks(channels) {
+                                let avg = frame.iter().copied().sum::<f32>() / channels as f32;
+                                b.push((avg.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
+                }
+                cpal::SampleFormat::I16 => {
+                    let buf = t_samples.clone();
+                    device.build_input_stream(
+                        &config,
+                        move |data: &[i16], _: &_| {
+                            let mut b = buf.lock().unwrap();
+                            for frame in data.chunks(channels) {
+                                let avg = frame.iter().map(|&s| s as i32).sum::<i32>()
+                                    / channels as i32;
+                                b.push(avg as i16);
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
+                }
+                cpal::SampleFormat::U16 => {
+                    let buf = t_samples.clone();
+                    device.build_input_stream(
+                        &config,
+                        move |data: &[u16], _: &_| {
+                            let mut b = buf.lock().unwrap();
+                            for frame in data.chunks(channels) {
+                                let avg = frame.iter().map(|&s| s as i32 - 32768).sum::<i32>()
+                                    / channels as i32;
+                                b.push(avg as i16);
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
+                }
+                other => {
+                    eprintln!("Nicht unterstuetztes Sample-Format: {other:?}");
+                    Err(cpal::BuildStreamError::StreamConfigNotSupported)
+                }
+            }
+        };
+
+        let stream = match build() {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = ready_tx.send(Err(format!("Audio-Stream: {e}")));
+                return;
+            }
+        };
+        if let Err(e) = stream.play() {
+            let _ = ready_tx.send(Err(format!("Audio-Start: {e}")));
+            return;
+        }
+        let _ = ready_tx.send(Ok(()));
+
+        // Keep the stream (and thus capture) alive until stop is requested.
+        while !t_stop.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        drop(stream);
+    });
+
+    match ready_rx.recv() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            let _ = join.join();
+            return Err(e);
+        }
+        Err(_) => return Err("Audio-Thread unerwartet beendet.".into()),
+    }
+
+    *guard = Some(RecorderHandle {
+        stop,
+        join,
+        samples,
+        sample_rate,
+    });
+    Ok(())
+}
+
+/// Stops the recording and returns the captured audio as a base64-encoded WAV
+/// (16-bit PCM mono), ready to hand to `transcribe` with content type audio/wav.
+#[tauri::command]
+fn record_stop(state: tauri::State<'_, AudioRecorder>) -> Result<String, String> {
+    use base64::Engine as _;
+    use std::sync::atomic::Ordering;
+
+    let handle = state
+        .inner
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take()
+        .ok_or_else(|| "Keine laufende Aufnahme.".to_string())?;
+
+    handle.stop.store(true, Ordering::SeqCst);
+    let _ = handle.join.join();
+
+    let samples = handle.samples.lock().map_err(|e| e.to_string())?.clone();
+    let sample_rate = handle.sample_rate.load(Ordering::SeqCst).max(16000);
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).map_err(|e| e.to_string())?;
+        for sample in samples {
+            writer.write_sample(sample).map_err(|e| e.to_string())?;
+        }
+        writer.finalize().map_err(|e| e.to_string())?;
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(cursor.into_inner()))
+}
+
 // --- Autostart (launch on login) -------------------------------------------
 
 #[tauri::command]
@@ -362,6 +554,7 @@ pub fn run() {
         .manage(RecordingFlag::default())
         .manage(PopoverPinned::default())
         .manage(TrayRect::default())
+        .manage(AudioRecorder::default())
         .invoke_handler(tauri::generate_handler![
             secret_set,
             secret_get,
@@ -371,6 +564,8 @@ pub fn run() {
             chat_complete,
             set_hotkey,
             paste_text,
+            record_start,
+            record_stop,
             set_autostart,
             get_autostart,
             set_recording,
