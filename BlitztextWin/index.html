@@ -1,43 +1,59 @@
 <!doctype html>
-<html lang="en">
+<html lang="de">
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <title>Blitztext</title>
     <script type="module" src="/src/main.ts" defer></script>
+    <style>
+      .settings { max-width: 440px; margin: 0 auto; text-align: left; }
+      .settings label { display: block; margin: 12px 0 4px; font-size: 13px; font-weight: 600; }
+      .settings input, .settings select { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px; }
+      .subtitle { opacity: 0.7; margin-top: 0; }
+      .status { margin-left: 8px; opacity: 0.8; font-size: 12px; font-weight: 400; }
+      .actions { margin-top: 18px; display: flex; align-items: center; gap: 4px; }
+    </style>
   </head>
 
   <body>
     <main class="container">
-      <h1>Welcome to Tauri</h1>
+      <h1>Blitztext</h1>
+      <p class="subtitle">Einstellungen</p>
 
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+      <form id="settings-form" class="settings">
+        <label for="provider">Anbieter</label>
+        <select id="provider">
+          <option value="liteLLM">LiteLLM Gateway</option>
+          <option value="openAI">OpenAI</option>
+        </select>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
+        <div id="litellm-fields">
+          <label for="baseURL">Gateway-URL (ohne /v1)</label>
+          <input id="baseURL" placeholder="http://ai-gateway.intra.evia.de:4000" />
+
+          <label for="apiKey">API-Key <span id="key-status" class="status"></span></label>
+          <input
+            id="apiKey"
+            type="password"
+            placeholder="sk-...  (leer lassen, um den gespeicherten zu behalten)"
+          />
+
+          <label for="fastModel">Modell: Text verbessern / Emojis</label>
+          <input id="fastModel" placeholder="gpt-4o-mini" />
+
+          <label for="strongModel">Modell: Dampf ablassen</label>
+          <input id="strongModel" placeholder="gpt-5.5" />
+
+          <label for="transcriptionModel">Transkriptionsmodell</label>
+          <input id="transcriptionModel" placeholder="gpt-4o-transcribe" />
+        </div>
+
+        <div class="actions">
+          <button type="submit">Speichern</button>
+          <span id="save-status" class="status"></span>
+        </div>
       </form>
-      <p id="greet-msg"></p>
     </main>
   </body>
 </html>
