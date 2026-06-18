@@ -76,8 +76,9 @@ jobs:
           path: dist-installers/*
           if-no-files-found: error
 
-      # Push to main: publish a rolling prerelease (own tag namespace so it never
-      # collides with the macOS v0.1.<run> prereleases).
+      # One combined prerelease per commit: same SHA-derived tag as the macOS
+      # job, so both apps' artifacts land on a single release. Whichever job
+      # runs first creates it; the other just uploads its installers.
       - name: Publish prerelease (push to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
@@ -85,13 +86,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="win-v0.1.${{ github.run_number }}"
+          TAG="main-${GITHUB_SHA:0:7}"
           gh release create "$TAG" \
             dist-installers/* \
-            --title "Blitztext Windows $TAG" \
+            --title "Blitztext main build (${GITHUB_SHA:0:7})" \
             --prerelease \
             --target "$GITHUB_SHA" \
-            --notes "Automatic Windows build from main (commit ${GITHUB_SHA:0:7}). Unsigned installer (NSIS .exe / MSI). SmartScreen may warn on first launch."
+            --notes "Automatic build from main (commit ${GITHUB_SHA:0:7}). Windows: unsigned NSIS/MSI — SmartScreen may warn on first launch. macOS: universal, ad-hoc signed (not notarized)." \
+          || gh release upload "$TAG" dist-installers/* --clobber
 
       # Version tag (e.g. v1.0.0): attach the Windows installers to the release.
       # The macOS job may have created the release already, so fall back to
