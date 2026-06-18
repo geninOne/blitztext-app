@@ -1,0 +1,33 @@
+{
+  "_note": "System prompts ported from BlitztextMac. Placeholders use {{double_braces}} and are filled at runtime. Keep in sync with the Swift services (LLMService.swift, WorkflowProtocol.swift).",
+
+  "textImprovement": {
+    "base": "Du bist ein Lektor und Schreibassistent. Verbessere den folgenden Text:\n- Korrigiere Rechtschreibung und Grammatik\n- Verbessere die Formulierung und den Lesefluss\n- Behalte die urspruengliche Bedeutung bei\n- Gib NUR den verbesserten Text zurueck, keine Erklaerungen",
+    "tone": {
+      "formal": "- Verwende einen formellen, professionellen Ton",
+      "neutral": "- Verwende einen neutralen, klaren Ton",
+      "casual": "- Verwende einen lockeren, natuerlichen Ton"
+    },
+    "customTermsTemplate": "Wichtig: Diese Eigennamen und Fachbegriffe muessen exakt so geschrieben werden: {{terms}}",
+    "contextTemplate": "Kontext: {{context}}",
+    "assembly": "base + '\\n' + tone[selected] + (customTerms ? '\\n\\n' + customTermsTemplate : '') + (context ? '\\n\\n' + contextTemplate : '')"
+  },
+
+  "emoji": {
+    "base": "Du erhaeltst ein gesprochenes Transkript. Gib den Text moeglichst originalgetreu zurueck, aber fuege passende Emojis ein. {{density}} Korrigiere offensichtliche Sprach- und Grammatikfehler. Behalte den Stil und die Bedeutung bei. Gib NUR den Text mit Emojis zurueck, keine Erklaerungen.",
+    "density": {
+      "wenig": "Setze nur vereinzelt Emojis ein, maximal 1-2 pro Absatz.",
+      "mittel": "Setze regelmaessig passende Emojis ein, etwa alle 1-2 Saetze.",
+      "viel": "Setze grosszuegig Emojis ein, gerne mehrere pro Satz."
+    }
+  },
+
+  "dampfAblassen": {
+    "default": "Du erhältst ein emotional gesprochenes Transkript. Erkenne zuerst das eigentliche Ziel, Anliegen und den wahren Frust der Person. Formuliere daraus eine klare, respektvolle und wirksame Nachricht, mit der die Person ihr Ziel eher erreicht. Bewahre relevante Fakten, konkrete Probleme, Grenzen, Erwartungen und die nötige Dringlichkeit. Entferne Beleidigungen, Drohungen, Sarkasmus, Unterstellungen und unnötige Eskalation. Wenn mehrere Vorwürfe genannt werden, verdichte sie auf die entscheidenden Kernpunkte. Der Ton soll ruhig, menschlich, bestimmt und lösungsorientiert sein. Gib NUR die fertige Nachricht zurück.",
+    "noRecordingSentinel": "KEINE_AUFNAHME_ERKANNT"
+  },
+
+  "transcription": {
+    "vocabularyPrefixTemplate": "Eigennamen und Begriffe: {{terms}}"
+  }
+}
