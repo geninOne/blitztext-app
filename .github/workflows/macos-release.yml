@@ -61,18 +61,22 @@ jobs:
       # downloadable build. The tag is created here by GITHUB_TOKEN, which on
       # purpose does NOT re-trigger this workflow, so we build and release in
       # one job rather than relying on a tag-triggered run.
+      # One combined prerelease per commit: the tag is derived from the SHA so
+      # the macOS and Windows jobs target the SAME release. Whichever job runs
+      # first creates it; the other just uploads its asset.
       - name: Publish prerelease (push to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v0.1.${{ github.run_number }}"
+          TAG="main-${GITHUB_SHA:0:7}"
           gh release create "$TAG" \
             Blitztext-macos-universal.zip \
-            --title "Blitztext $TAG" \
+            --title "Blitztext main build (${GITHUB_SHA:0:7})" \
             --prerelease \
             --target "$GITHUB_SHA" \
-            --notes "Automatic build from main (commit ${GITHUB_SHA:0:7}). Universal macOS (Apple Silicon + Intel), ad-hoc signed (not notarized). First launch: right-click the app and choose Open, or run: xattr -dr com.apple.quarantine /Applications/Blitztext.app"
+            --notes "Automatic build from main (commit ${GITHUB_SHA:0:7}). macOS: universal (Apple Silicon + Intel), ad-hoc signed (not notarized) — first launch: right-click → Open, or run: xattr -dr com.apple.quarantine /Applications/Blitztext.app. Windows: unsigned NSIS/MSI — SmartScreen may warn on first launch." \
+          || gh release upload "$TAG" Blitztext-macos-universal.zip --clobber
 
       # Manual version tag (e.g. v1.0.0): publish a full, official release.
       - name: Publish release (version tag)
