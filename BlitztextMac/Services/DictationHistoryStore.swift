@@ -41,11 +41,15 @@ final class DictationHistoryStore {
         audioExtension: String
     ) {
         var storedURL: URL?
-        if let audioData {
+        if let audioData, !audioData.isEmpty {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let ext = audioExtension.isEmpty ? "m4a" : audioExtension
             let destination = directory.appendingPathComponent("\(UUID().uuidString).\(ext)")
-            if (try? audioData.write(to: destination)) != nil {
+            do {
+                try audioData.write(to: destination)
                 storedURL = destination
+            } catch {
+                storedURL = nil
             }
         }
 

@@ -155,6 +155,11 @@ private struct DictationHistoryRow: View {
                             .foregroundStyle(.blue)
                     }
                     .buttonStyle(.plain)
+                } else {
+                    Image(systemName: "speaker.slash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                        .help("Keine Audiodatei gespeichert")
                 }
                 Text(entry.workflow.displayName)
                     .font(.system(size: 11.5, weight: .semibold))
