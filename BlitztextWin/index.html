@@ -153,6 +153,18 @@
 
       .switch-row { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 13px; }
       .switch-row input { width: auto; accent-color: var(--accent); }
+
+      /* Verlauf (history) */
+      .hist-label { display: flex; align-items: center; justify-content: space-between; }
+      .hist-clear { width: auto; height: auto; padding: 3px 9px; font-size: 11px; }
+      .hist-empty { font-size: 12px; color: var(--text-2); padding: 8px 0; }
+      .hist-entry { padding: 10px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--field); }
+      .hist-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); margin-bottom: 6px; }
+      .hist-head .wf { font-weight: 700; color: var(--text); }
+      .hist-entry audio { width: 100%; height: 32px; margin: 2px 0 8px; }
+      .hist-io { font-size: 12px; line-height: 1.35; margin: 4px 0; }
+      .hist-io .k { display: block; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); margin-bottom: 2px; }
+      .hist-io .v { color: var(--text); white-space: pre-wrap; word-break: break-word; }
     </style>
   </head>
 
@@ -201,6 +213,7 @@
           <div class="tabs" id="tabs">
             <button type="button" data-tab="customize" class="active">Anpassen</button>
             <button type="button" data-tab="access">Zugang</button>
+            <button type="button" data-tab="history">Verlauf</button>
           </div>
 
           <!-- Tab: Anpassen -->
@@ -309,6 +322,18 @@
                 <input type="checkbox" id="autostart" />
                 Blitztext automatisch starten
               </label>
+            </div>
+          </div>
+
+          <!-- Tab: Verlauf -->
+          <div id="tab-history" class="tab-panel" hidden>
+            <div class="section" style="margin-top: 10px;">
+              <div class="section-label hist-label">
+                <span>Verlauf · letzte 10</span>
+                <button type="button" id="history-clear" class="hk-btn hist-clear" title="Leeren">Leeren</button>
+              </div>
+              <p class="hint">Nur diese Sitzung, nur zum Debuggen: Aufnahme anhören und prüfen, ob richtig erkannt wurde.</p>
+              <div id="history-list"></div>
             </div>
           </div>
         </div>

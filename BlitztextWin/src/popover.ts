@@ -79,9 +79,21 @@ const SUBTITLES: Record<WorkflowType, string> = {
 
 const WORKFLOW_ORDER: WorkflowType[] = ["transcribe", "improve", "dampf", "emoji"];
 
+// Session-only debug history (in memory, max 10 — WAVs are too big for
+// localStorage). Lets you replay the audio and check what was recognized.
+type HistoryEntry = {
+  time: string;
+  workflow: WorkflowType;
+  input: string;
+  output: string;
+  audioBase64: string;
+};
+const MAX_HISTORY = 10;
+
 window.addEventListener("DOMContentLoaded", async () => {
   let settings: Settings = loadSettings();
   const persist = () => saveSettings(settings);
+  const history: HistoryEntry[] = [];
 
   // --- View switching (menu <-> settings, in the same popover) ---
   const viewMenu = el("view-menu");
@@ -187,6 +199,17 @@ window.addEventListener("DOMContentLoaded", async () => {
         });
       }
 
+      // Keep a session-only debug entry (newest first, capped at 10).
+      history.unshift({
+        time: new Date().toLocaleTimeString(),
+        workflow: currentWorkflow,
+        input: text,
+        output: result,
+        audioBase64,
+      });
+      if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+      if (!el("tab-history").hidden) renderHistory();
+
       if (result) await invoke("paste_text", { text: result });
       setStatus("Bereit");
     } catch (error) {
@@ -240,9 +263,60 @@ window.addEventListener("DOMContentLoaded", async () => {
     tabButtons.forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     el("tab-customize").hidden = name !== "customize";
     el("tab-access").hidden = name !== "access";
+    el("tab-history").hidden = name !== "history";
+    if (name === "history") renderHistory();
   }
   tabButtons.forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab!)));
   showTab("customize");
+
+  // --- Verlauf (debug history) ---
+  function renderHistory(): void {
+    const list = el("history-list");
+    list.innerHTML = "";
+    if (history.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "hist-empty";
+      empty.textContent = "Noch keine Aufnahmen in dieser Sitzung.";
+      list.append(empty);
+      return;
+    }
+    for (const entry of history) {
+      const card = document.createElement("div");
+      card.className = "hist-entry";
+
+      const head = document.createElement("div");
+      head.className = "hist-head";
+      head.innerHTML = `<span class="wf"></span><span> · ${entry.time}</span>`;
+      head.querySelector(".wf")!.textContent = workflowBrandNames[entry.workflow];
+
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.preload = "none";
+      audio.src = `data:audio/wav;base64,${entry.audioBase64}`;
+
+      const input = document.createElement("div");
+      input.className = "hist-io";
+      input.innerHTML = `<span class="k">Eingabe (erkannt)</span><span class="v"></span>`;
+      input.querySelector(".v")!.textContent = entry.input || "(leer)";
+
+      card.append(head, audio, input);
+
+      // Only show the output when a rewrite actually changed the text.
+      if (entry.output && entry.output !== entry.input) {
+        const output = document.createElement("div");
+        output.className = "hist-io";
+        output.innerHTML = `<span class="k">Ausgabe (eingefügt)</span><span class="v"></span>`;
+        output.querySelector(".v")!.textContent = entry.output;
+        card.append(output);
+      }
+
+      list.append(card);
+    }
+  }
+  el<HTMLButtonElement>("history-clear").addEventListener("click", () => {
+    history.length = 0;
+    renderHistory();
+  });
 
   // Provider + credentials + models
   const baseURL = el<HTMLInputElement>("baseURL");
