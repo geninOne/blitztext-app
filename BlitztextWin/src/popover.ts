@@ -23,31 +23,6 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
-}
-
-function pickRecorderMimeType(): string | undefined {
-  const preferred = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg"];
-  return preferred.find(
-    (t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t),
-  );
-}
-
-function extForMime(mime: string): string {
-  const base = mime.split(";")[0];
-  if (base.includes("mp4")) return "mp4";
-  if (base.includes("ogg")) return "ogg";
-  if (base.includes("wav")) return "wav";
-  if (base.includes("mpeg")) return "mp3";
-  return "webm";
-}
-
 function setupSegmented(
   containerId: string,
   current: string,
@@ -158,74 +133,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   // --- Dictation pipeline ---
-  let mediaRecorder: MediaRecorder | null = null;
-  let chunks: Blob[] = [];
+  // Recording is done natively in the Rust core (cpal -> 16-bit mono WAV) for
+  // deterministic, high quality. record_start begins capture; record_stop
+  // returns the WAV as base64, which we transcribe -> optionally rewrite -> paste.
+  let recording = false;
+  let busy = false;
   let currentWorkflow: WorkflowType = "transcribe";
 
   async function startRecording(workflow: WorkflowType): Promise<void> {
-    if (mediaRecorder && mediaRecorder.state === "recording") return;
+    if (recording || busy) return;
     settings = loadSettings(); // pick up changes made in the settings view
     currentWorkflow = workflow;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      });
-      chunks = [];
-      const chosen = pickRecorderMimeType();
-      const options: MediaRecorderOptions = { audioBitsPerSecond: 128000 };
-      if (chosen) options.mimeType = chosen;
-      const recorder = new MediaRecorder(stream, options);
-      mediaRecorder = recorder;
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        const mime = recorder.mimeType || "audio/webm";
-        const baseMime = mime.split(";")[0];
-        try {
-          const blob = new Blob(chunks, { type: mime });
-          const bytes = new Uint8Array(await blob.arrayBuffer());
-          setStatus("Transkribiere ...", "busy");
-          const text = await invoke<string>("transcribe", {
-            baseUrl: settings.liteLLM.baseURL.trim(),
-            model: settings.liteLLM.transcriptionModel.trim() || "gpt-4o-transcribe",
-            language: "de",
-            audioBase64: toBase64(bytes),
-            filename: `audio.${extForMime(mime)}`,
-            contentType: baseMime,
-          });
-
-          let result = text;
-          const system = systemPromptFor(currentWorkflow, settings);
-          if (system && text) {
-            const model =
-              currentWorkflow === "dampf"
-                ? settings.liteLLM.strongModel.trim() || defaultSettings.liteLLM.strongModel
-                : settings.liteLLM.fastModel.trim() || defaultSettings.liteLLM.fastModel;
-            setStatus(`Verarbeite (${workflowLabels[currentWorkflow]}) ...`, "busy");
-            result = await invoke<string>("chat_complete", {
-              baseUrl: settings.liteLLM.baseURL.trim(),
-              model,
-              system,
-              user: text,
-            });
-          }
-
-          if (result) await invoke("paste_text", { text: result });
-          setStatus("Bereit");
-        } catch (error) {
-          setStatus(`Fehler: ${error}`);
-        } finally {
-          await invoke("set_recording", { active: false });
-        }
-      };
-      recorder.start();
+      await invoke("record_start");
+      recording = true;
       await invoke("set_recording", { active: true });
       setStatus(`Aufnahme (${workflowLabels[workflow]}) ...`, "recording");
     } catch (error) {
@@ -234,14 +155,56 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  async function finishRecording(): Promise<void> {
+    if (!recording) return;
+    recording = false;
+    busy = true;
+    try {
+      const audioBase64 = await invoke<string>("record_stop");
+      setStatus("Transkribiere ...", "busy");
+      const text = await invoke<string>("transcribe", {
+        baseUrl: settings.liteLLM.baseURL.trim(),
+        model: settings.liteLLM.transcriptionModel.trim() || "gpt-4o-transcribe",
+        language: "de",
+        audioBase64,
+        filename: "audio.wav",
+        contentType: "audio/wav",
+      });
+
+      let result = text;
+      const system = systemPromptFor(currentWorkflow, settings);
+      if (system && text) {
+        const model =
+          currentWorkflow === "dampf"
+            ? settings.liteLLM.strongModel.trim() || defaultSettings.liteLLM.strongModel
+            : settings.liteLLM.fastModel.trim() || defaultSettings.liteLLM.fastModel;
+        setStatus(`Verarbeite (${workflowLabels[currentWorkflow]}) ...`, "busy");
+        result = await invoke<string>("chat_complete", {
+          baseUrl: settings.liteLLM.baseURL.trim(),
+          model,
+          system,
+          user: text,
+        });
+      }
+
+      if (result) await invoke("paste_text", { text: result });
+      setStatus("Bereit");
+    } catch (error) {
+      setStatus(`Fehler: ${error}`);
+    } finally {
+      busy = false;
+      await invoke("set_recording", { active: false });
+    }
+  }
+
   function stopRecording(): void {
-    if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+    void finishRecording();
   }
 
   // Click a row: hide the popover (so focus + paste return to the active app),
   // then record in toggle mode. A tray click stops it (via "popover-stop").
   async function startFromRow(workflow: WorkflowType): Promise<void> {
-    if (mediaRecorder && mediaRecorder.state === "recording") {
+    if (recording) {
       stopRecording();
       return;
     }
@@ -260,7 +223,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       const isRepeat = now - lastHotkeyDown < 500;
       lastHotkeyDown = now;
       if (isRepeat) return;
-      if (mediaRecorder && mediaRecorder.state === "recording") stopRecording();
+      if (recording) stopRecording();
       else void startRecording(workflow);
     } else {
       void startRecording(workflow); // hold: re-entry is ignored in startRecording

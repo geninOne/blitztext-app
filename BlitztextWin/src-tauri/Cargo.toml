@@ -30,4 +30,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 base64 = "0.22"
 enigo = "0.3"
 arboard = "3"
+cpal = "0.15"
+hound = "3"
 
