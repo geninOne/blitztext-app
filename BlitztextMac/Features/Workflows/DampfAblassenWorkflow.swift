@@ -114,6 +114,7 @@ final class DampfAblassenWorkflow: Workflow {
                 }
                 phase = .done(cleanedAnswer)
                 onOutput?(cleanedAnswer)
+                recordDictationHistory(workflow: type, audioURL: url, input: cleanedRawText, output: cleanedAnswer)
             } catch {
                 phase = .error(error.localizedDescription)
             }

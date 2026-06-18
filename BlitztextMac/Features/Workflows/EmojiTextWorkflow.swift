@@ -114,6 +114,7 @@ final class EmojiTextWorkflow: Workflow {
                 }
                 phase = .done(cleanedResult)
                 onOutput?(cleanedResult)
+                recordDictationHistory(workflow: type, audioURL: url, input: cleanedRawText, output: cleanedResult)
             } catch {
                 phase = .error(error.localizedDescription)
             }

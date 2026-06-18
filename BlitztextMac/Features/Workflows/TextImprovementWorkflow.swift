@@ -109,6 +109,7 @@ final class TextImprovementWorkflow: Workflow {
                 let cleanedImproved = TranscriptionQualityService.cleanedTranscript(improved)
                 phase = .done(cleanedImproved)
                 onOutput?(cleanedImproved)
+                recordDictationHistory(workflow: type, audioURL: url, input: cleanedRawText, output: cleanedImproved)
             } catch {
                 phase = .error(error.localizedDescription)
             }
