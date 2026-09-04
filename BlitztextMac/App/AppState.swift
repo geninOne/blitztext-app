@@ -54,9 +54,21 @@ final class AppState {
     var emojiTextSettings: EmojiTextSettings {
         didSet { saveSettings() }
     }
+    var dictationSettings: DictationSettings {
+        didSet { saveSettings() }
+    }
 
     // Hotkeys
     let hotkeyService = HotkeyService()
+
+    // Diktat
+    private let vaultInboxService = VaultInboxService()
+    private let dictationQueue = DictationQueueStore(fileURL: AppSupportPaths.dictationQueueURL)
+    var dictationQueueCount = 0
+    /// Grund, warum der letzte Nachziehversuch vorzeitig endete. nil heisst,
+    /// es gab nichts Ungewöhnliches. Wird in den Einstellungen angezeigt.
+    var dictationQueueIssue: String?
+    var notificationsDenied = false
 
     // Computed
 
@@ -82,15 +94,26 @@ final class AppState {
         activeWorkflow?.phase ?? .idle
     }
 
+    var vaultFolderConfigured: Bool {
+        !dictationSettings.vaultFolderPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     init() {
         self.appSettings = Self.loadAppSettings()
         self.transcriptionSettings = Self.loadTranscriptionSettings()
         self.textImprovementSettings = Self.loadTextImprovementSettings()
         self.dampfAblassenSettings = Self.loadDampfAblassenSettings()
         self.emojiTextSettings = Self.loadEmojiTextSettings()
+        self.dictationSettings = Self.loadDictationSettings()
         refreshAccessibilityPermission()
         autoSelectFastLocalModelIfNeeded()
         prewarmLocalTranscriptionIfNeeded()
+
+        if !dictationSettings.vaultFolderPath.isEmpty {
+            flushDictationQueue()
+        } else {
+            refreshDictationQueueCount()
+        }
     }
 
     // MARK: - Custom Display Names
@@ -123,6 +146,12 @@ final class AppState {
             return "Online: Transkription über \(appSettings.apiProvider.displayName)."
         case .localTranscription:
             return "Nur lokal. Kein Server."
+        case .vaultDictation:
+            guard vaultFolderConfigured else {
+                return "Kein Ablageordner eingestellt."
+            }
+            let ordner = URL(fileURLWithPath: dictationSettings.vaultFolderPath).lastPathComponent
+            return "In die Tagesdatei in \(ordner)."
         case .textImprover, .dampfAblassen, .emojiText:
             if appSettings.secureLocalModeEnabled {
                 return "Im lokalen Modus pausiert."
@@ -234,6 +263,20 @@ final class AppState {
             configureWorkflowHandlers(workflow)
             activeWorkflow = workflow
             workflow.start()
+
+        case .vaultDictation:
+            let workflow = TranscriptionWorkflow(
+                type: .vaultDictation,
+                customTerms: textImprovementSettings.customTerms,
+                language: transcriptionSettings.language,
+                backend: appSettings.secureLocalModeEnabled ? .local : .remote,
+                localModelName: selectedLocalModelName,
+                apiConfiguration: apiConfiguration
+            )
+            configureWorkflowHandlers(workflow)
+            activeWorkflow = workflow
+            Task { await UserNotificationService.requestAuthorizationIfNeeded() }
+            workflow.start()
         }
 
         page = source.presentsWorkflowPage ? .workflow : .main
@@ -244,6 +287,11 @@ final class AppState {
         case .localTranscription:
             return selectedLocalModelIsInstalled
         case .transcription:
+            return appSettings.secureLocalModeEnabled
+                ? selectedLocalModelIsInstalled
+                : remoteProviderConfigured
+        case .vaultDictation:
+            guard vaultFolderConfigured else { return false }
             return appSettings.secureLocalModeEnabled
                 ? selectedLocalModelIsInstalled
                 : remoteProviderConfigured
@@ -396,7 +444,8 @@ final class AppState {
             transcription: transcriptionSettings,
             textImprovement: textImprovementSettings,
             dampfAblassen: dampfAblassenSettings,
-            emojiText: emojiTextSettings
+            emojiText: emojiTextSettings,
+            dictation: dictationSettings
         )
         if let data = try? JSONEncoder().encode(container) {
             try? data.write(to: Self.settingsURL)
@@ -421,6 +470,10 @@ final class AppState {
 
     private static func loadEmojiTextSettings() -> EmojiTextSettings {
         loadContainer()?.emojiText ?? EmojiTextSettings()
+    }
+
+    private static func loadDictationSettings() -> DictationSettings {
+        loadContainer()?.dictation ?? DictationSettings()
     }
 
     private static func loadContainer() -> SettingsContainer? {
@@ -468,17 +521,137 @@ final class AppState {
         }
     }
 
-    private func handleWorkflowOutput(_ text: String) {
-        pasteAtCursor(text, target: activePasteTarget)
+    private func handleWorkflowOutput(_ text: String, from workflow: any Workflow) {
+        let destination = workflow.type.outputDestination
+
+        switch destination {
+        case .cursor:
+            pasteAtCursor(text, target: activePasteTarget)
+        case .vaultInbox:
+            // Bewusst kein pasteAtCursor: es darf kein Text in ein fremdes
+            // Fenster rutschen.
+            writeToVaultInbox(text)
+        }
+
         if activeLaunchSource == .hotkeyBackground {
             page = .main
         }
         scheduleWorkflowCleanup(after: 1.05)
     }
 
+    // MARK: - Diktat in den Vault
+
+    private func writeToVaultInbox(_ text: String) {
+        let settings = dictationSettings
+        let recordedAt = Date()
+
+        Task { [weak self] in
+            guard let self else { return }
+
+            // Vor jedem neuen Schreiben nachziehen, damit die Reihenfolge
+            // stimmt und liegengebliebene Gedanken nicht verhungern.
+            let vorlauf = await self.dictationQueue.flush(
+                using: self.vaultInboxService,
+                settings: settings
+            )
+            self.dictationQueueIssue = vorlauf.stoppedBecause
+
+            do {
+                let ziel = try await self.vaultInboxService.append(
+                    text: text,
+                    recordedAt: recordedAt,
+                    settings: settings
+                )
+                await self.finishVaultWrite(
+                    text: text,
+                    fileName: ziel.lastPathComponent,
+                    queueRemaining: vorlauf.remaining
+                )
+            } catch {
+                await self.handleVaultWriteFailure(
+                    text: text,
+                    recordedAt: recordedAt,
+                    reason: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func finishVaultWrite(text: String, fileName: String, queueRemaining: Int) async {
+        dictationQueueCount = queueRemaining
+        UserNotificationService.notifyDictationSaved(
+            preview: text,
+            fileName: fileName,
+            olderPending: queueRemaining
+        )
+    }
+
+    private func handleVaultWriteFailure(text: String, recordedAt: Date, reason: String) async {
+        // Zwischenablage zuerst: sie ist sofort greifbar, auch wenn das
+        // Ablegen in die Warteschlange scheitert.
+        copyToClipboard(text)
+
+        menuBarStatus = .error(.vaultDictation)
+
+        do {
+            try await dictationQueue.enqueue(
+                QueuedDictation(recordedAt: recordedAt, text: text)
+            )
+            dictationQueueCount = (try? await dictationQueue.pending())?.count ?? dictationQueueCount
+            UserNotificationService.notifyDictationFailed(reason: reason)
+        } catch {
+            // Auch die Warteschlange ist beschädigt: der Text steht dann
+            // ausschließlich in der Zwischenablage, und genau das muss die
+            // Meldung sagen, statt fälschlich "liegt in der Warteschlange"
+            // zu suggerieren.
+            UserNotificationService.notifyDictationFailed(
+                reason: "\(reason) Auch das Ablegen in der Warteschlange ist fehlgeschlagen."
+            )
+        }
+    }
+
+    /// Zieht liegengebliebene Diktate nach. Aufgerufen beim Start und von der
+    /// Schaltfläche in den Einstellungen.
+    func flushDictationQueue() {
+        let settings = dictationSettings
+        Task { [weak self] in
+            guard let self else { return }
+            let ergebnis = await self.dictationQueue.flush(
+                using: self.vaultInboxService,
+                settings: settings
+            )
+            self.dictationQueueCount = ergebnis.remaining
+            self.dictationQueueIssue = ergebnis.stoppedBecause
+        }
+    }
+
+    func refreshDictationQueueCount() {
+        Task { [weak self] in
+            guard let self else { return }
+            // Ist die Warteschlangendatei beschädigt, bleibt der letzte
+            // bekannte Zähler stehen. Ein stilles 0 wäre die falsche
+            // Auskunft, denn die Einträge sind ja noch da.
+            if let offen = try? await self.dictationQueue.pending() {
+                self.dictationQueueCount = offen.count
+            }
+        }
+    }
+
+    func refreshNotificationPermission() {
+        Task { [weak self] in
+            guard let self else { return }
+            self.notificationsDenied = await UserNotificationService.authorizationDenied()
+        }
+    }
+
+    func setVaultFolder(_ url: URL) {
+        dictationSettings.vaultFolderPath = url.path
+    }
+
     private func configureWorkflowHandlers<T: Workflow>(_ workflow: T) {
-        workflow.onOutput = { [weak self] text in
-            self?.handleWorkflowOutput(text)
+        workflow.onOutput = { [weak self, weak workflow] text in
+            guard let self, let workflow else { return }
+            self.handleWorkflowOutput(text, from: workflow)
         }
         workflow.onPhaseChange = { [weak self, weak workflow] phase in
             guard let self, let workflow else { return }
@@ -624,6 +797,7 @@ private struct SettingsContainer: Codable {
     var textImprovement: TextImprovementSettings
     var dampfAblassen: DampfAblassenSettings?
     var emojiText: EmojiTextSettings?
+    var dictation: DictationSettings?
 }
 
 // MARK: - Notification for Popover Dismissal
