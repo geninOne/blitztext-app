@@ -45,7 +45,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNCOTAyMkVGQzVCNzk3MDYKUldRR2w3ZkY3eUtRTzdHUkRrNDdpd3FLb1lqajR0RlR4cUlpNTRac0EvdVNUaDJsTjJoOWtEeTUK",
       "endpoints": [
         "https://github.com/geninOne/blitztext-app/releases/latest/download/latest.json"
       ],
