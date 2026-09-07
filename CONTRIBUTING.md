@@ -42,9 +42,10 @@ universal.
 
 ## Continuous Integration
 
-A pull request runs the `CI` workflow only: secret scan on Linux, a macOS debug
-build for the runner's architecture, and the Windows frontend plus a Rust debug
-build without installers. These are compile checks, not artifacts.
+A pull request runs the `CI` workflow only: `Secret hygiene` on Linux,
+`macOS compile check` (debug build for the runner's architecture), and
+`Windows compile check` (frontend plus a Rust debug build, no installers).
+These are compile checks, not artifacts.
 
 Universal macOS builds, Windows installers, signatures, and releases are
 produced on a push to `main` and on a version tag.

@@ -65,7 +65,9 @@ jobs:
           fi
 
   build-macos:
-    name: Build macOS app
+    # Der Name muss sich von den Release-Workflows unterscheiden, sonst gibt es
+    # zwei Checks gleichen Namens und Required Checks werden unbrauchbar.
+    name: macOS compile check
     runs-on: macos-14
     timeout-minutes: 30
 
@@ -94,7 +96,7 @@ jobs:
         run: ./build.sh --debug --fast
 
   build-windows:
-    name: Build Windows app
+    name: Windows compile check
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
