@@ -1,10 +1,13 @@
 name: macOS Build & Release
 
 # Builds a universal (Apple Silicon + Intel) macOS app.
-# - On pull requests and pushes to main: build, verify, and upload the app as a
-#   downloadable run artifact (no public release).
-# - On a version tag (v*): additionally publish a GitHub Release with the app
-#   attached for download.
+# - On pushes to main: build, verify, and publish a rolling prerelease.
+# - On a version tag (v*): publish a GitHub Release with the app attached.
+# - On a pull request: only when the PR carries the label `build-artifacts`.
+#   Die schnelle Kompilierpruefung fuer PRs macht ci.yml; ein universal
+#   Release-Build gehoert dort nicht in jeden Push. Wer ein herunterladbares
+#   Test-Build am PR braucht, setzt das Label (oder startet den Workflow per
+#   "Run workflow" auf dem Branch).
 #
 # Note: this is a native macOS app (SwiftUI/AppKit, CoreML/WhisperKit, Keychain,
 # Accessibility). There is no Windows build target; a Windows version would be a
@@ -12,6 +15,9 @@ name: macOS Build & Release
 
 on:
   pull_request:
+    # `labeled` ist noetig, damit das Setzen des Labels den Lauf ausloest;
+    # die Standard-Typen enthalten es nicht.
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'BlitztextMac/**'
       - 'build.sh'
@@ -29,6 +35,9 @@ concurrency:
 jobs:
   macos:
     name: Build universal macOS app
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'build-artifacts')
     runs-on: macos-latest
     permissions:
       contents: write   # required to publish a Release on tag pushes

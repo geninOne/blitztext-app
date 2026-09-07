@@ -1,19 +1,44 @@
 name: CI
 
+# Schnelle Pruefungen fuer Pull Requests und main.
+#
+# Dieser Workflow baut absichtlich nichts Auslieferbares: universal macOS
+# Binary, Windows Installer, Signaturen und Releases entstehen in den beiden
+# Release-Workflows, die nur noch auf main und auf Versions-Tags laufen.
+# Hier geht es allein um die Frage "kompiliert das und sind keine Secrets
+# eingecheckt", und zwar so schnell wie moeglich.
+
 on:
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
   push:
     branches:
       - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
 
 permissions:
   contents: read
 
+# Ein neuer Push auf denselben Branch macht den laufenden Check wertlos.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-macos:
-    name: Build macOS app
-    runs-on: macos-14
-    timeout-minutes: 30
+  secret-scan:
+    name: Secret hygiene
+    # Ein grep braucht keinen macOS-Runner. Auf Linux ist der Job in Sekunden
+    # durch und blockiert keine der knappen macOS-Kapazitaeten.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: Checkout
@@ -39,14 +64,73 @@ jobs:
             exit 1
           fi
 
+  build-macos:
+    # Der Name muss sich von den Release-Workflows unterscheiden, sonst gibt es
+    # zwei Checks gleichen Namens und Required Checks werden unbrauchbar.
+    name: macOS compile check
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode.app
 
       - name: Install XcodeGen
+        env:
+          # Ohne das laedt Homebrew erst seinen Index neu, was laenger dauert
+          # als die Installation selbst.
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
         run: |
           if ! command -v xcodegen >/dev/null 2>&1; then
             brew install xcodegen
           fi
 
-      - name: Build
-        run: ./build.sh --debug
+      # --fast baut nur fuer die Architektur des Runners und ohne clean. Ob der
+      # Code auch als universal Binary durchgeht, beantwortet der Release-Build
+      # auf main; hier wuerde die zweite Architektur nur die Laufzeit verdoppeln.
+      - name: Build (Debug, host arch)
+        run: ./build.sh --debug --fast
+
+  build-windows:
+    name: Windows compile check
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: BlitztextWin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: BlitztextWin/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: BlitztextWin/src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tsc + vite. Erzeugt auch dist/, das der Rust-Build einbettet.
+      - name: Build frontend
+        run: npm run build
+
+      # Debug-Profil und kein Bundling: NSIS- und MSI-Installer entstehen erst
+      # im Release-Workflow. Fuer die Frage, ob der Rust-Teil kompiliert,
+      # braucht es weder Optimierung noch Installer.
+      - name: Build Rust (Debug, no bundle)
+        run: cargo build --manifest-path src-tauri/Cargo.toml --locked
