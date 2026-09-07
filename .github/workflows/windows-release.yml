@@ -1,15 +1,20 @@
 name: Windows Build & Release
 
 # Builds the Windows app (Tauri v2, in BlitztextWin/).
-# - On pull requests (touching the Windows app or shared/) and pushes to main:
-#   build and upload the installers as a downloadable run artifact.
-# - On a push to main: additionally publish a rolling prerelease (tag
-#   win-v0.1.<run>) so there is always a current downloadable build.
+# - On a push to main: build the installers and publish a rolling prerelease so
+#   there is always a current downloadable build.
 # - On a version tag (v*): attach the Windows installers to the GitHub Release
 #   (shared with the macOS build for the same tag).
+# - On a pull request: only when the PR carries the label `build-artifacts`.
+#   Die schnelle Kompilierpruefung fuer PRs macht ci.yml; das Bundling von
+#   NSIS- und MSI-Installern im Release-Profil ist der teuerste Schritt und
+#   gehoert nicht in jeden Push.
 
 on:
   pull_request:
+    # `labeled` ist noetig, damit das Setzen des Labels den Lauf ausloest;
+    # die Standard-Typen enthalten es nicht.
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'BlitztextWin/**'
       - 'shared/**'
@@ -26,6 +31,9 @@ concurrency:
 jobs:
   windows:
     name: Build Windows app
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'build-artifacts')
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:

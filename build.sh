@@ -6,6 +6,7 @@ set -euo pipefail
 
 RUN_AFTER=false
 INSTALL_APP=false
+FAST_BUILD=false
 BUILD_CONFIGURATION="Release"
 UNIVERSAL_ARCHS="arm64 x86_64"
 
@@ -23,15 +24,34 @@ for arg in "$@"; do
         --release)
             BUILD_CONFIGURATION="Release"
             ;;
+        --fast)
+            # Nur die Architektur des Rechners, kein clean. Fuer schnelle
+            # Kompilierpruefungen wie in der CI, nicht fuer Auslieferung.
+            FAST_BUILD=true
+            ;;
         *)
             echo "Unbekannte Option: $arg"
-            echo "Verwendung: ./build.sh [--install] [--run] [--release] [--debug]"
+            echo "Verwendung: ./build.sh [--install] [--run] [--release] [--debug] [--fast]"
             exit 1
             ;;
     esac
 done
 
-verify_universal_app() {
+if [ "$FAST_BUILD" = true ]; then
+    BUILD_ARCHS="$(uname -m)"
+    XCODEBUILD_ACTIONS=(build)
+else
+    BUILD_ARCHS="$UNIVERSAL_ARCHS"
+    XCODEBUILD_ACTIONS=(clean build)
+fi
+
+if [ "$FAST_BUILD" = true ] && [ "$INSTALL_APP" = true ]; then
+    echo "❌ --fast und --install passen nicht zusammen."
+    echo "   Ein --fast-Build laeuft nur auf $BUILD_ARCHS und ist nicht universal."
+    exit 1
+fi
+
+verify_app_archs() {
     local app_path="$1"
     local app_name
     local binary_path
@@ -53,14 +73,17 @@ verify_universal_app() {
         exit 1
     fi
 
-    if [[ " $archs " != *" arm64 "* || " $archs " != *" x86_64 "* ]]; then
-        echo "❌ Build ist nicht universal. Erwartet: arm64 + x86_64"
-        echo "   Gefunden: $archs"
-        file "$binary_path" 2>/dev/null || true
-        exit 1
-    fi
+    local expected
+    for expected in $BUILD_ARCHS; do
+        if [[ " $archs " != *" $expected "* ]]; then
+            echo "❌ Build enthaelt $expected nicht. Erwartet: $BUILD_ARCHS"
+            echo "   Gefunden: $archs"
+            file "$binary_path" 2>/dev/null || true
+            exit 1
+        fi
+    done
 
-    echo "✅ Universal Binary verifiziert: $archs"
+    echo "✅ Architekturen verifiziert: $archs"
 }
 
 ensure_xcodebuild_available() {
@@ -113,8 +136,8 @@ xcodebuild \
     -configuration "$BUILD_CONFIGURATION" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
     ONLY_ACTIVE_ARCH=NO \
-    ARCHS="$UNIVERSAL_ARCHS" \
-    clean build
+    ARCHS="$BUILD_ARCHS" \
+    "${XCODEBUILD_ACTIONS[@]}"
 
 # App finden
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/$BUILD_CONFIGURATION/Blitztext.app"
@@ -124,7 +147,7 @@ if [ ! -d "$APP_PATH" ]; then
     exit 1
 fi
 
-verify_universal_app "$APP_PATH"
+verify_app_archs "$APP_PATH"
 
 # Resources manuell ins Bundle kopieren (xcodegen kopiert sie nicht automatisch)
 echo "📋 Kopiere Resources ..."
@@ -140,7 +163,7 @@ rm -rf "$DEST"
 cp -R "$APP_PATH" "$DEST"
 echo "🔏 Signiere lokale Development-App ad-hoc. Dieses Artefakt ist nicht notarisiert."
 codesign --force --sign - "$DEST" 2>&1
-verify_universal_app "$DEST"
+verify_app_archs "$DEST"
 
 RUN_TARGET="$DEST"
 
@@ -156,7 +179,7 @@ if [ "$INSTALL_APP" = true ]; then
     cp -R "$DEST" "$INSTALL_DEST"
     echo "🔏 Signiere lokale Development-App ad-hoc. Dieses Artefakt ist nicht notarisiert."
     codesign --force --sign - "$INSTALL_DEST" 2>&1
-    verify_universal_app "$INSTALL_DEST"
+    verify_app_archs "$INSTALL_DEST"
     RUN_TARGET="$INSTALL_DEST"
 fi
 
@@ -168,8 +191,12 @@ if [ "$INSTALL_APP" = true ]; then
 fi
 echo ""
 echo "Build-Typ: $BUILD_CONFIGURATION"
-echo "Architekturen: $UNIVERSAL_ARCHS"
-echo "Kompatibel: Apple Silicon + Intel (macOS 14+)"
+echo "Architekturen: $BUILD_ARCHS"
+if [ "$FAST_BUILD" = true ]; then
+    echo "Kompatibel: nur dieser Rechner. Fuer Auslieferung ohne --fast bauen."
+else
+    echo "Kompatibel: Apple Silicon + Intel (macOS 14+)"
+fi
 echo ""
 echo "Naechste Schritte:"
 echo "1. App starten"
