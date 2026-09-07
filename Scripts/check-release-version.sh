@@ -18,6 +18,12 @@ cd "$REPO_ROOT"
 mac_version="$(sed -n 's/^ *MARKETING_VERSION: *"\{0,1\}\([0-9.]*\)"\{0,1\} *$/\1/p' BlitztextMac/project.yml | head -1)"
 win_package="$(node -p "require('./BlitztextWin/package.json').version")"
 win_tauri="$(node -p "require('./BlitztextWin/src-tauri/tauri.conf.json').version")"
+win_cargo="$(sed -n 's/^version = "\([0-9][0-9.]*\)".*/\1/p' BlitztextWin/src-tauri/Cargo.toml | head -1)"
+# Die Lock-Datei traegt die Version des eigenen Pakets mit. Wird sie beim
+# Versionssprung vergessen, laeuft der Windows-Build zwar durch, schreibt aber
+# die Lock-Datei still um. Der CI-Job faengt das mit --locked ab, hier steht
+# es dann gleich mit Dateinamen dabei.
+win_cargo_lock="$(awk '/^name = "blitztextwin"$/ {getline; gsub(/[^0-9.]/, "", $0); print; exit}' BlitztextWin/src-tauri/Cargo.lock)"
 
 status=0
 check() {
@@ -32,6 +38,8 @@ check() {
 check "BlitztextMac/project.yml (MARKETING_VERSION)" "$mac_version"
 check "BlitztextWin/package.json (version)" "$win_package"
 check "BlitztextWin/src-tauri/tauri.conf.json (version)" "$win_tauri"
+check "BlitztextWin/src-tauri/Cargo.toml (version)" "$win_cargo"
+check "BlitztextWin/src-tauri/Cargo.lock (blitztextwin)" "$win_cargo_lock"
 
 # Ohne oeffentlichen Schluessel lehnt jeder Client das Update ab. Das faellt
 # erst beim Nutzer auf, deshalb gehoert es hierher.
