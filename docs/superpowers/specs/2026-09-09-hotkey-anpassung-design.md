@@ -152,7 +152,9 @@ Aufnahmeablauf:
    Badge zeigt "Tasten druecken".
 2. `HotkeyService.suspend()` legt den globalen Monitor still.
 3. Ein lokaler `flagsChanged`-Monitor merkt sich die groesste
-   gleichzeitig gehaltene Modifier-Menge der laufenden Aufnahme.
+   gleichzeitig gehaltene Modifier-Menge der laufenden Aufnahme. Bei
+   gleicher Groesse gewinnt die zuletzt gehaltene Menge, damit keine
+   Kombination uebernommen wird, deren Tasten nicht mehr anliegen.
 4. Beim Loslassen aller Modifier wird diese Menge geprueft und bei
    Erfolg gespeichert. Bei reinen Modifier-Kombinationen ist das
    Loslassen die natuerliche Bestaetigung, ein Enter braucht es nicht.

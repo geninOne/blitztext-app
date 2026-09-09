@@ -23,6 +23,7 @@
 - Commit-Nachrichten im Stil des Repositories: `Update: <deutscher Satz>` mit ASCII-Umlauten (ae, oe, ue, ss).
 - Tests laufen mit `./test.sh` im Projektwurzelverzeichnis, einzeln ueber `./test.sh -only-testing:BlitztextMacTests/<Klasse>`.
 - Das Testziel `BlitztextMacTests` listet seine Quelldateien einzeln in `project.yml`. Jede neue Datei, die getestet werden soll, muss dort eingetragen werden. `./test.sh` ruft `xcodegen generate` selbst auf.
+- `BlitztextMac/BlitztextMac.xcodeproj` ist per `.gitignore` ungetrackt und wird von XcodeGen erzeugt. Nicht committen.
 - `BlitztextWin` wird in diesem Plan nicht angefasst.
 
 ---
@@ -502,7 +503,7 @@ Expected: PASS, alle 14 Testmethoden.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add BlitztextMac/Features/Workflows/WorkflowType.swift BlitztextMac/Features/Workflows/WorkflowProtocol.swift BlitztextMac/Services/HotkeyBinding.swift BlitztextMac/Tests/HotkeyBindingsTests.swift BlitztextMac/project.yml BlitztextMac/BlitztextMac.xcodeproj
+git add BlitztextMac/Features/Workflows/WorkflowType.swift BlitztextMac/Features/Workflows/WorkflowProtocol.swift BlitztextMac/Services/HotkeyBinding.swift BlitztextMac/Tests/HotkeyBindingsTests.swift BlitztextMac/project.yml
 git commit -m "Update: Datenmodell fuer anpassbare Tastenkuerzel"
 ```
 
@@ -669,7 +670,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add BlitztextMac/Services/HotkeyMatcher.swift BlitztextMac/Tests/HotkeyMatcherTests.swift BlitztextMac/project.yml BlitztextMac/BlitztextMac.xcodeproj
+git add BlitztextMac/Services/HotkeyMatcher.swift BlitztextMac/Tests/HotkeyMatcherTests.swift BlitztextMac/project.yml
 git commit -m "Update: Entscheidungslogik fuer Tastenkuerzel mit Wartezeit bei Praefixen"
 ```
 
@@ -1037,7 +1038,9 @@ final class HotkeyRecorder {
         let kombination = HotkeyCombo(flags: flags)
 
         guard kombination.isEmpty else {
-            if kombination.modifiers.count > groessteKombination.modifiers.count {
+            // Bei gleicher Groesse gewinnt die zuletzt gehaltene Menge, sonst
+            // bliebe eine Menge stehen, deren Tasten nicht mehr gedrueckt sind.
+            if kombination.modifiers.count >= groessteKombination.modifiers.count {
                 groessteKombination = kombination
             }
             return
@@ -1285,7 +1288,7 @@ In den Einstellungen, Tab Anpassen, Abschnitt Tastenkuerzel:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add BlitztextMac/Features/Settings/HotkeyRecorderRow.swift BlitztextMac/Features/Settings/SettingsContentView.swift BlitztextMac/BlitztextMac.xcodeproj
+git add BlitztextMac/Features/Settings/HotkeyRecorderRow.swift BlitztextMac/Features/Settings/SettingsContentView.swift
 git commit -m "Update: Tastenkuerzel in den Einstellungen aufnehmen und zuruecksetzen"
 ```
 
