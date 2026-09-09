@@ -49,17 +49,6 @@ enum WorkflowType: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    var hotkeyLabel: String {
-        switch self {
-        case .transcription: return "fn + Shift"
-        case .localTranscription: return "fn + Shift + Ctrl"
-        case .vaultDictation: return "fn + Shift + Option"
-        case .textImprover: return "fn + Control"
-        case .dampfAblassen: return "fn + Option"
-        case .emojiText: return "fn + Cmd"
-        }
-    }
-
     var accentColor: String {
         switch self {
         case .transcription: return "blue"

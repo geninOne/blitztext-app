@@ -1085,7 +1085,7 @@ struct CustomizeSettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionLabel(text: "Diktat")
 
-                Text("fn + Shift + Option h\u{00E4}lt einen Gedanken in einer Tagesdatei fest, statt ihn am Cursor einzusetzen.")
+                Text("\(appState.hotkeyLabel(for: .vaultDictation)) h\u{00E4}lt einen Gedanken in einer Tagesdatei fest, statt ihn am Cursor einzusetzen.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
 
