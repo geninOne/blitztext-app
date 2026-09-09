@@ -145,11 +145,18 @@ struct HotkeyBindings: Codable, Equatable {
         WorkflowType.allCases.contains { !isDefault(for: $0) }
     }
 
-    /// Alle vergebenen Kombinationen, die laengste zuerst.
+    /// Alle vergebenen Kombinationen, die laengste zuerst. Bei gleicher
+    /// Groesse entscheidet der rawValue des Workflows, damit die Reihenfolge
+    /// deterministisch ist.
     var assignments: [(type: WorkflowType, combo: HotkeyCombo)] {
         WorkflowType.allCases
             .map { (type: $0, combo: combo(for: $0)) }
-            .sorted { $0.combo.modifiers.count > $1.combo.modifiers.count }
+            .sorted {
+                if $0.combo.modifiers.count != $1.combo.modifiers.count {
+                    return $0.combo.modifiers.count > $1.combo.modifiers.count
+                }
+                return $0.type.rawValue < $1.type.rawValue
+            }
     }
 
     func owner(of combo: HotkeyCombo, excluding type: WorkflowType) -> WorkflowType? {
@@ -170,8 +177,19 @@ struct HotkeyBindings: Codable, Equatable {
         }
     }
 
+    /// Setzt eine Abweichung zurueck und kaskadiert: belegt ein anderer
+    /// Workflow danach den Standard des zurueckgesetzten, wird auch er
+    /// zurueckgesetzt, in einer Schleife, bis keine Doppelbelegung mehr
+    /// besteht. Das terminiert, weil jeder Durchlauf eine Abweichung entfernt
+    /// (eine endliche Menge) und die Standards selbst untereinander
+    /// konfliktfrei sind, die Kaskade also nicht im Kreis laufen kann.
     mutating func reset(_ type: WorkflowType) {
         overrides[type] = nil
+        var aktuellerTyp = type
+        while let besitzer = owner(of: Self.defaultCombo(for: aktuellerTyp), excluding: aktuellerTyp) {
+            overrides[besitzer] = nil
+            aktuellerTyp = besitzer
+        }
     }
 
     mutating func resetAll() {

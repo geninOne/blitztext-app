@@ -42,6 +42,31 @@ final class HotkeyBindingsTests: XCTestCase {
         XCTAssertFalse(bindings.hasOverrides)
     }
 
+    func testZuruecksetzenKaskadiertBeiDoppelbelegung() {
+        // Blitztext (transcription) auf Ctrl+Option legen, dann Blitztext :)
+        // (emojiText) auf fn+Shift, das durch den Umzug frei geworden ist.
+        var bindings = HotkeyBindings()
+        bindings.set(HotkeyCombo(.control, .option), for: .transcription)
+        bindings.set(HotkeyCombo(.fn, .shift), for: .emojiText)
+        XCTAssertEqual(bindings.combo(for: .emojiText), HotkeyCombo(.fn, .shift))
+
+        // Zuruecksetzen auf der Blitztext-Zeile: ohne Kaskade laegen jetzt
+        // beide auf fn+Shift.
+        bindings.reset(.transcription)
+
+        XCTAssertEqual(bindings.combo(for: .transcription), HotkeyBindings.defaultCombo(for: .transcription))
+        XCTAssertEqual(bindings.combo(for: .emojiText), HotkeyBindings.defaultCombo(for: .emojiText))
+        XCTAssertTrue(bindings.isDefault(for: .emojiText))
+
+        var gesehen: Set<HotkeyCombo> = []
+        for typ in WorkflowType.allCases {
+            XCTAssertTrue(
+                gesehen.insert(bindings.combo(for: typ)).inserted,
+                "\(typ.rawValue) belegt eine bereits vergebene Kombination"
+            )
+        }
+    }
+
     func testAllesZuruecksetzen() {
         var bindings = HotkeyBindings()
         bindings.set(HotkeyCombo(.control, .option), for: .transcription)
