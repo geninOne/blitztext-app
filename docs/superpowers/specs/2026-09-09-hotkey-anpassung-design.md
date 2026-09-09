@@ -131,8 +131,8 @@ Standards, eine Migration ist nicht notwendig. Gespeichert wird weiter
 ueber den bestehenden `SettingsContainer`.
 
 `AppState.appSettings.didSet` uebergibt die Bindings an den
-`HotkeyService`. `BlitztextMacApp` setzt sie beim Start einmal vor
-`hotkeyService.start()`.
+`HotkeyService`, `AppState.init` setzt die geladenen Kuerzel einmal beim
+Start, weil `didSet` im Init nicht feuert.
 
 ## UI
 
@@ -195,9 +195,11 @@ XCTest, wie die bestehenden Tests unter `Tests/`.
 - Praefix-Fall liefert `.defer` mit 150 ms.
 - Die laengere Kombination feuert sofort.
 - Loslassen liefert `.release` fuer die aktive Kombination.
-- Eine Flag-Aenderung waehrend der Wartezeit verwirft die verzoegerte
-  Entscheidung.
 - Nicht belegte Flag-Kombinationen liefern `.none`.
+- Laeuft schon eine Aufnahme, aendert eine andere Kombination nichts.
+
+Das Verwerfen einer verzoegerten Entscheidung bei einer Flag-Aenderung
+liegt in `HotkeyService` und wird manuell geprueft, nicht per Unit-Test.
 
 ## Nicht Teil dieser Aenderung
 
