@@ -31,7 +31,9 @@ enum HotkeyEvent {
 @Observable
 @MainActor
 final class HotkeyService {
-    /// Die aktuell vergebenen Kuerzel. Wird vom AppState gesetzt.
+    /// Die aktuell vergebenen Kuerzel. Wird vom AppState gesetzt, keine View
+    /// liest sie direkt.
+    @ObservationIgnored
     var bindings = HotkeyBindings()
 
     var onHotkeyEvent: ((HotkeyEvent) -> Void)?
@@ -43,6 +45,14 @@ final class HotkeyService {
     private var activeCombo: WorkflowType?
     /// Laufende Wartezeit fuer eine Praefix-Kombination.
     private var pendingTask: Task<Void, Never>?
+    /// Kombination und Workflow der laufenden Wartezeit, damit eine
+    /// Lockerung der Tasten die Entscheidung sofort fallen lassen kann.
+    private var pendingCombo: HotkeyCombo?
+    private var pendingType: WorkflowType?
+    /// Die zuletzt in handleFlags gesehene Kombination. firePending prueft
+    /// gegen diese und nicht gegen NSEvent.modifierFlags, damit Entscheidung
+    /// und Nachpruefung dieselbe Wahrheitsquelle haben.
+    private var lastSeenCombo = HotkeyCombo([])
     /// Solange true, liefert der Dienst keine Ereignisse. Wird beim Aufnehmen
     /// eines neuen Kuerzels in den Einstellungen gesetzt.
     private var isSuspended = false
@@ -97,15 +107,30 @@ final class HotkeyService {
     private func handleFlags(_ flags: NSEvent.ModifierFlags) {
         guard !isSuspended else { return }
 
-        cancelPending()
-
         let combo = HotkeyCombo(flags: flags)
+        lastSeenCombo = combo
+
+        if let ausstehenderTyp = pendingType, let ausstehendeCombo = pendingCombo,
+           !ausstehendeCombo.isStrictSubset(of: combo) {
+            // Die Tasten wurden gelockert statt erweitert: die ausstehende
+            // Entscheidung faellt jetzt, bevor die neuen Flags verarbeitet
+            // werden. Sonst bliebe ein kurzer Tipp auf ein
+            // Praefix-Kuerzel im Druecken-Modus wirkungslos.
+            cancelPending()
+            activeCombo = ausstehenderTyp
+            onHotkeyEvent?(.down(ausstehenderTyp))
+        } else {
+            cancelPending()
+        }
+
         switch HotkeyMatcher(bindings: bindings).decision(for: combo, active: activeCombo) {
         case .fire(let type):
             activeCombo = type
             onHotkeyEvent?(.down(type))
 
         case .delayed(let type, let delay):
+            pendingCombo = combo
+            pendingType = type
             pendingTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(delay))
                 guard !Task.isCancelled else { return }
@@ -125,8 +150,10 @@ final class HotkeyService {
     /// gehalten werden.
     private func firePending(_ type: WorkflowType, combo: HotkeyCombo) {
         pendingTask = nil
+        pendingCombo = nil
+        pendingType = nil
         guard !isSuspended, activeCombo == nil else { return }
-        guard HotkeyCombo(flags: NSEvent.modifierFlags) == combo else { return }
+        guard lastSeenCombo == combo else { return }
         activeCombo = type
         onHotkeyEvent?(.down(type))
     }
@@ -134,6 +161,8 @@ final class HotkeyService {
     private func cancelPending() {
         pendingTask?.cancel()
         pendingTask = nil
+        pendingCombo = nil
+        pendingType = nil
     }
 
     private func handleEscape() {
