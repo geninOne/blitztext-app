@@ -44,6 +44,7 @@ final class AppState {
     var appSettings: AppSettings {
         didSet {
             saveSettings()
+            hotkeyService.bindings = appSettings.hotkeyBindings
             prewarmLocalTranscriptionIfNeeded()
         }
     }
@@ -128,6 +129,7 @@ final class AppState {
         self.dampfAblassenSettings = Self.loadDampfAblassenSettings()
         self.emojiTextSettings = Self.loadEmojiTextSettings()
         self.dictationSettings = Self.loadDictationSettings()
+        hotkeyService.bindings = appSettings.hotkeyBindings
         refreshAccessibilityPermission()
         autoSelectFastLocalModelIfNeeded()
         prewarmLocalTranscriptionIfNeeded()
@@ -137,6 +139,34 @@ final class AppState {
         } else {
             refreshDictationQueueCount()
         }
+    }
+
+    // MARK: - Tastenkuerzel
+
+    func hotkeyLabel(for type: WorkflowType) -> String {
+        appSettings.hotkeyBindings.combo(for: type).displayLabel
+    }
+
+    /// Prueft und speichert eine neue Kombination. Bei einem Fehler bleibt die
+    /// gespeicherte Kombination unveraendert.
+    @discardableResult
+    func setHotkey(_ combo: HotkeyCombo, for type: WorkflowType) -> HotkeyComboValidation {
+        let ergebnis = appSettings.hotkeyBindings.validate(combo, for: type)
+        guard ergebnis == .ok else { return ergebnis }
+        appSettings.hotkeyBindings.set(combo, for: type)
+        return .ok
+    }
+
+    func resetHotkey(_ type: WorkflowType) {
+        appSettings.hotkeyBindings.reset(type)
+    }
+
+    func resetAllHotkeys() {
+        appSettings.hotkeyBindings.resetAll()
+    }
+
+    var hasCustomHotkeys: Bool {
+        appSettings.hotkeyBindings.hasOverrides
     }
 
     // MARK: - Custom Display Names

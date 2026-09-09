@@ -1,77 +1,5 @@
 import Foundation
 
-// MARK: - Workflow Types
-
-enum WorkflowType: String, CaseIterable, Identifiable, Codable {
-    case transcription
-    case localTranscription
-    case vaultDictation
-    case textImprover
-    case dampfAblassen
-    case emojiText
-
-    var id: String { rawValue }
-
-    static var mainMenuCases: [WorkflowType] {
-        allCases.filter { $0 != .localTranscription }
-    }
-
-    var displayName: String {
-        switch self {
-        case .transcription: return "Blitztext"
-        case .localTranscription: return "Blitztext Lokal"
-        case .vaultDictation: return "Blitztext Notiz"
-        case .textImprover: return "Blitztext+"
-        case .dampfAblassen: return "Blitztext $%&!"
-        case .emojiText: return "Blitztext :)"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .transcription: return "mic.fill"
-        case .localTranscription: return "lock.shield.fill"
-        case .vaultDictation: return "tray.and.arrow.down.fill"
-        case .textImprover: return "text.badge.checkmark"
-        case .dampfAblassen: return "flame.fill"
-        case .emojiText: return "face.smiling"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .transcription: return "Sprache rein. Text raus."
-        case .localTranscription: return "Nur lokal. Kein Server."
-        case .vaultDictation: return "Gedanke rein. Inbox raus."
-        case .textImprover: return "Geschrieben sprechen."
-        case .dampfAblassen: return "Frust rein. Entspannt raus."
-        case .emojiText: return "Text rein. Emojis dazu."
-        }
-    }
-
-    var hotkeyLabel: String {
-        switch self {
-        case .transcription: return "fn + Shift"
-        case .localTranscription: return "fn + Shift + Ctrl"
-        case .vaultDictation: return "fn + Shift + Option"
-        case .textImprover: return "fn + Control"
-        case .dampfAblassen: return "fn + Option"
-        case .emojiText: return "fn + Cmd"
-        }
-    }
-
-    var accentColor: String {
-        switch self {
-        case .transcription: return "blue"
-        case .localTranscription: return "green"
-        case .vaultDictation: return "indigo"
-        case .textImprover: return "purple"
-        case .dampfAblassen: return "orange"
-        case .emojiText: return "cyan"
-        }
-    }
-}
-
 // MARK: - Output Destination
 
 /// Wohin das Ergebnis eines Workflows geht. Alle bisherigen Workflows setzen
@@ -159,6 +87,7 @@ enum APIProvider: String, Codable, CaseIterable, Identifiable {
 
 struct AppSettings: Codable {
     var hotkeyMode: HotkeyMode = .hold
+    var hotkeyBindings: HotkeyBindings = HotkeyBindings()
     var hasSeenOnboarding: Bool = false
     var secureLocalModeEnabled: Bool = false
     var selectedLocalTranscriptionModelName: String = LocalTranscriptionService.recommendedFastModelName
@@ -177,6 +106,7 @@ struct AppSettings: Codable {
 
     init(
         hotkeyMode: HotkeyMode = .hold,
+        hotkeyBindings: HotkeyBindings = HotkeyBindings(),
         hasSeenOnboarding: Bool = false,
         secureLocalModeEnabled: Bool = false,
         selectedLocalTranscriptionModelName: String = LocalTranscriptionService.recommendedFastModelName,
@@ -190,6 +120,7 @@ struct AppSettings: Codable {
         lastUpdateCheck: Date? = nil
     ) {
         self.hotkeyMode = hotkeyMode
+        self.hotkeyBindings = hotkeyBindings
         self.hasSeenOnboarding = hasSeenOnboarding
         self.secureLocalModeEnabled = secureLocalModeEnabled
         self.selectedLocalTranscriptionModelName = selectedLocalTranscriptionModelName
@@ -205,6 +136,7 @@ struct AppSettings: Codable {
 
     enum CodingKeys: String, CodingKey {
         case hotkeyMode
+        case hotkeyBindings
         case hasSeenOnboarding
         case secureLocalModeEnabled
         case selectedLocalTranscriptionModelName
@@ -221,6 +153,14 @@ struct AppSettings: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hotkeyMode = try container.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode) ?? .hold
+        // Ein Formfehler nur bei hotkeyBindings darf nicht die gesamte
+        // AppSettings-Dekodierung scheitern lassen: loadContainer() faengt
+        // Fehler mit try? ab, das wuerde sonst alle Einstellungsgruppen auf
+        // Standard zuruecksetzen. Deshalb hier lokal abfangen.
+        hotkeyBindings = (try? container.decodeIfPresent(
+            HotkeyBindings.self,
+            forKey: .hotkeyBindings
+        )) ?? HotkeyBindings()
         hasSeenOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasSeenOnboarding) ?? false
         secureLocalModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .secureLocalModeEnabled) ?? false
         selectedLocalTranscriptionModelName = try container.decodeIfPresent(

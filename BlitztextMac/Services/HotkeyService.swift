@@ -31,29 +31,51 @@ enum HotkeyEvent {
 @Observable
 @MainActor
 final class HotkeyService {
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
-    private var keyMonitor: Any?
-    private var activeCombo: WorkflowType?  // Which combo is currently held
+    /// Die aktuell vergebenen Kuerzel. Wird vom AppState gesetzt, keine View
+    /// liest sie direkt.
+    @ObservationIgnored
+    var bindings = HotkeyBindings()
 
     var onHotkeyEvent: ((HotkeyEvent) -> Void)?
 
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
+    private var keyMonitor: Any?
+    /// Kombination, die gerade gehalten wird.
+    private var activeCombo: WorkflowType?
+    /// Laufende Wartezeit fuer eine Praefix-Kombination.
+    private var pendingTask: Task<Void, Never>?
+    /// Kombination und Workflow der laufenden Wartezeit, damit eine
+    /// Lockerung der Tasten die Entscheidung sofort fallen lassen kann.
+    private var pendingCombo: HotkeyCombo?
+    private var pendingType: WorkflowType?
+    /// Die zuletzt in handleFlags gesehene Kombination. firePending prueft
+    /// gegen diese und nicht gegen NSEvent.modifierFlags, damit Entscheidung
+    /// und Nachpruefung dieselbe Wahrheitsquelle haben.
+    private var lastSeenCombo = HotkeyCombo([])
+    /// Solange true, liefert der Dienst keine Ereignisse. Wird beim Aufnehmen
+    /// eines neuen Kuerzels in den Einstellungen gesetzt.
+    private var isSuspended = false
+
     func start() {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            let flags = event.modifierFlags
             Task { @MainActor in
-                self?.handleFlags(event)
+                self?.handleFlags(flags)
             }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            let flags = event.modifierFlags
             Task { @MainActor in
-                self?.handleFlags(event)
+                self?.handleFlags(flags)
             }
             return event
         }
         // Escape key monitor for toggle mode
         keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let keyCode = event.keyCode
             Task { @MainActor in
-                if event.keyCode == 53 { // Escape
+                if keyCode == 53 { // Escape
                     self?.handleEscape()
                 }
             }
@@ -61,6 +83,7 @@ final class HotkeyService {
     }
 
     func stop() {
+        cancelPending()
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
@@ -69,71 +92,82 @@ final class HotkeyService {
         keyMonitor = nil
     }
 
-    private func handleFlags(_ event: NSEvent) {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    /// Legt den Dienst still, ohne die Monitore abzubauen. Waehrend der
+    /// Aufnahme eines neuen Kuerzels darf kein Workflow starten.
+    func suspend() {
+        isSuspended = true
+        cancelPending()
+        activeCombo = nil
+    }
 
-        // fn + Shift + Control -> local transcription
-        if flags == [.function, .shift, .control] {
-            if activeCombo == nil {
-                activeCombo = .localTranscription
-                onHotkeyEvent?(.down(.localTranscription))
-            }
-            return
+    func resume() {
+        isSuspended = false
+    }
+
+    private func handleFlags(_ flags: NSEvent.ModifierFlags) {
+        guard !isSuspended else { return }
+
+        let combo = HotkeyCombo(flags: flags)
+        lastSeenCombo = combo
+
+        if let ausstehenderTyp = pendingType, let ausstehendeCombo = pendingCombo,
+           !ausstehendeCombo.isStrictSubset(of: combo) {
+            // Die Tasten wurden gelockert statt erweitert: die ausstehende
+            // Entscheidung faellt jetzt, bevor die neuen Flags verarbeitet
+            // werden. Sonst bliebe ein kurzer Tipp auf ein
+            // Praefix-Kuerzel im Druecken-Modus wirkungslos.
+            cancelPending()
+            activeCombo = ausstehenderTyp
+            onHotkeyEvent?(.down(ausstehenderTyp))
+        } else {
+            cancelPending()
         }
 
-        // fn + Shift + Option -> Diktat in die Tagesdatei
-        if flags == [.function, .shift, .option] {
-            if activeCombo == nil {
-                activeCombo = .vaultDictation
-                onHotkeyEvent?(.down(.vaultDictation))
-            }
-            return
-        }
+        switch HotkeyMatcher(bindings: bindings).decision(for: combo, active: activeCombo) {
+        case .fire(let type):
+            activeCombo = type
+            onHotkeyEvent?(.down(type))
 
-        // fn + Shift -> transcription
-        if flags == [.function, .shift] {
-            if activeCombo == nil {
-                activeCombo = .transcription
-                onHotkeyEvent?(.down(.transcription))
+        case .delayed(let type, let delay):
+            pendingCombo = combo
+            pendingType = type
+            pendingTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                self?.firePending(type, combo: combo)
             }
-            return
-        }
 
-        // fn + Control -> Textverbesserer
-        if flags == [.function, .control] {
-            if activeCombo == nil {
-                activeCombo = .textImprover
-                onHotkeyEvent?(.down(.textImprover))
-            }
-            return
-        }
-
-        // fn + Option -> Rage Mode
-        if flags == [.function, .option] {
-            if activeCombo == nil {
-                activeCombo = .dampfAblassen
-                onHotkeyEvent?(.down(.dampfAblassen))
-            }
-            return
-        }
-
-        // fn + Command -> Emoji Mode
-        if flags == [.function, .command] {
-            if activeCombo == nil {
-                activeCombo = .emojiText
-                onHotkeyEvent?(.down(.emojiText))
-            }
-            return
-        }
-
-        // Keys released -- fire up event
-        if let combo = activeCombo {
+        case .release(let type):
             activeCombo = nil
-            onHotkeyEvent?(.up(combo))
+            onHotkeyEvent?(.up(type))
+
+        case .none:
+            break
         }
     }
 
+    /// Feuert nach abgelaufener Wartezeit, aber nur wenn die Tasten unveraendert
+    /// gehalten werden.
+    private func firePending(_ type: WorkflowType, combo: HotkeyCombo) {
+        pendingTask = nil
+        pendingCombo = nil
+        pendingType = nil
+        guard !isSuspended, activeCombo == nil else { return }
+        guard lastSeenCombo == combo else { return }
+        activeCombo = type
+        onHotkeyEvent?(.down(type))
+    }
+
+    private func cancelPending() {
+        pendingTask?.cancel()
+        pendingTask = nil
+        pendingCombo = nil
+        pendingType = nil
+    }
+
     private func handleEscape() {
+        guard !isSuspended else { return }
+        cancelPending()
         activeCombo = nil
         onHotkeyEvent?(.cancel)
     }
