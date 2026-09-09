@@ -934,6 +934,8 @@ struct AccessSettingsView: View {
 struct CustomizeSettingsView: View {
     @Bindable var appState: AppState
     @State private var newTerm = ""
+    @State private var recordingHotkeyType: WorkflowType?
+    @State private var zeigtHotkeyReset = false
 
     private var installedLocalModels: [LocalTranscriptionModel] {
         LocalTranscriptionService.installedModels()
@@ -1018,18 +1020,38 @@ struct CustomizeSettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionLabel(text: "Tastenk\u{00FC}rzel")
 
+                Text("Erlaubt sind Kombinationen aus mindestens zwei der Tasten fn, Shift, Ctrl, Option und Cmd.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 VStack(spacing: 6) {
                     ForEach(WorkflowType.mainMenuCases) { type in
-                        HStack {
-                            Text(type.hotkeyLabel)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 124, alignment: .leading)
-                            Text(appState.displayName(for: type))
-                                .font(.system(size: 11.5, weight: .medium))
-                            Spacer()
-                        }
+                        HotkeyRecorderRow(
+                            type: type,
+                            appState: appState,
+                            recordingType: $recordingHotkeyType
+                        )
                     }
+                }
+
+                Button("Alle Tastenk\u{00FC}rzel zur\u{00FC}cksetzen") {
+                    zeigtHotkeyReset = true
+                }
+                .font(.system(size: 11))
+                .disabled(!appState.hasCustomHotkeys)
+                .confirmationDialog(
+                    "Alle Tastenk\u{00FC}rzel auf den Standard zur\u{00FC}cksetzen?",
+                    isPresented: $zeigtHotkeyReset,
+                    titleVisibility: .visible
+                ) {
+                    Button("Zur\u{00FC}cksetzen", role: .destructive) {
+                        recordingHotkeyType = nil
+                        appState.resetAllHotkeys()
+                    }
+                    Button("Abbrechen", role: .cancel) {}
+                } message: {
+                    Text("Eigene Kombinationen gehen dabei verloren.")
                 }
 
                 // Mode picker
@@ -1045,6 +1067,18 @@ struct CustomizeSettingsView: View {
                     }
                     .pickerStyle(.segmented)
                 }
+            }
+            .onChange(of: recordingHotkeyType) { _, neu in
+                // Waehrend der Aufnahme darf kein Workflow starten.
+                if neu == nil {
+                    appState.hotkeyService.resume()
+                } else {
+                    appState.hotkeyService.suspend()
+                }
+            }
+            .onDisappear {
+                recordingHotkeyType = nil
+                appState.hotkeyService.resume()
             }
 
             // MARK: Diktat
