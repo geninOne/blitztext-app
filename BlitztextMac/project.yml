@@ -65,6 +65,7 @@ targets:
       - path: Tests
       - path: Features/Workflows/WorkflowType.swift
       - path: Services/HotkeyBinding.swift
+      - path: Services/HotkeyMatcher.swift
       - path: Services/DictationSettings.swift
       - path: Services/VaultInboxDocument.swift
       - path: Services/VaultInboxService.swift
