@@ -78,7 +78,12 @@ Schnittstelle von `HotkeyBindings`:
 - `func isDefault(for: WorkflowType) -> Bool`
 - `var hasOverrides: Bool`
 - `mutating func set(_: HotkeyCombo, for: WorkflowType)`
-- `mutating func reset(_: WorkflowType)`, `mutating func resetAll()`
+- `mutating func reset(_: WorkflowType)`, `mutating func resetAll()`.
+  `reset` setzt kaskadierend zurueck: belegt ein anderer Workflow den
+  Standard des zurueckgesetzten, wird er selbst zurueckgesetzt, bis
+  keine Doppelbelegung bleibt. Das terminiert, weil jeder Schritt eine
+  Abweichung entfernt und die sechs Standards untereinander
+  konfliktfrei sind.
 - `func owner(of: HotkeyCombo, excluding: WorkflowType) -> WorkflowType?`
 - `func validate(_: HotkeyCombo, for: WorkflowType) -> HotkeyComboValidation`
 
@@ -108,11 +113,19 @@ Ausgabe:  .fire(WorkflowType)
 und echte Teilmenge einer anderen vergebenen Kombination ist. Die
 Wartezeit betraegt 150 ms.
 
+Wird waehrend der Wartezeit ein Modifier gelockert, statt einen weiteren
+zu druecken, ist die Frage beantwortet: die ausstehende Entscheidung
+feuert dann sofort, bevor die neuen Flags verarbeitet werden. Sonst
+wuerde ein kurzer Tipp auf ein Praefix-Kuerzel im Druecken-Modus wirkungslos
+bleiben, und der Druecken-Modus soll sich nicht aendern.
+
 `HotkeyService` behaelt nur die Mechanik: die beiden `flagsChanged`
 -Monitore, den Escape-Monitor, einen `Task` fuer die Wartezeit, den
 Abbruch dieses Tasks bei jeder Flag-Aenderung und beim Loslassen, sowie
 eine Pruefung beim Ablauf der Wartezeit, dass die Flags unveraendert
-gehalten werden. Die sechs festen `if`-Bloecke verschwinden.
+gehalten werden. Diese Pruefung vergleicht gegen die zuletzt in
+`handleFlags` gesehenen Flags, nicht gegen `NSEvent.modifierFlags`, damit
+Entscheidung und Nachpruefung dieselbe Wahrheitsquelle haben. Die sechs festen `if`-Bloecke verschwinden.
 
 Zusaetzlich bekommt `HotkeyService`:
 
@@ -138,7 +151,10 @@ Start, weil `didSet` im Init nicht feuert.
 
 Abschnitt "Tastenkuerzel" in `SettingsContentView`:
 
-- Pro Workflow eine Zeile mit Name, Kuerzel-Badge, Knopf "Aendern" und
+- Pro Workflow eine Zeile, alle Workflows einschliesslich des lokalen
+  Modus. Dessen Kuerzel ist sein einziger Zugang, und ohne Zeile
+  verweist die Konfliktmeldung auf etwas Unsichtbares. Jede Zeile
+  zeigt Name, Kuerzel-Badge, Knopf "Aendern" und
   einem kleinen Zuruecksetzen-Symbol, das nur bei Abweichung vom
   Standard erscheint.
 - Am Abschnittsende "Alle Tastenkuerzel zuruecksetzen", nur aktiv wenn
