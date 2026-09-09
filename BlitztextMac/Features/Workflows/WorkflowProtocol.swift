@@ -87,6 +87,7 @@ enum APIProvider: String, Codable, CaseIterable, Identifiable {
 
 struct AppSettings: Codable {
     var hotkeyMode: HotkeyMode = .hold
+    var hotkeyBindings: HotkeyBindings = HotkeyBindings()
     var hasSeenOnboarding: Bool = false
     var secureLocalModeEnabled: Bool = false
     var selectedLocalTranscriptionModelName: String = LocalTranscriptionService.recommendedFastModelName
@@ -105,6 +106,7 @@ struct AppSettings: Codable {
 
     init(
         hotkeyMode: HotkeyMode = .hold,
+        hotkeyBindings: HotkeyBindings = HotkeyBindings(),
         hasSeenOnboarding: Bool = false,
         secureLocalModeEnabled: Bool = false,
         selectedLocalTranscriptionModelName: String = LocalTranscriptionService.recommendedFastModelName,
@@ -118,6 +120,7 @@ struct AppSettings: Codable {
         lastUpdateCheck: Date? = nil
     ) {
         self.hotkeyMode = hotkeyMode
+        self.hotkeyBindings = hotkeyBindings
         self.hasSeenOnboarding = hasSeenOnboarding
         self.secureLocalModeEnabled = secureLocalModeEnabled
         self.selectedLocalTranscriptionModelName = selectedLocalTranscriptionModelName
@@ -133,6 +136,7 @@ struct AppSettings: Codable {
 
     enum CodingKeys: String, CodingKey {
         case hotkeyMode
+        case hotkeyBindings
         case hasSeenOnboarding
         case secureLocalModeEnabled
         case selectedLocalTranscriptionModelName
@@ -149,6 +153,10 @@ struct AppSettings: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hotkeyMode = try container.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode) ?? .hold
+        hotkeyBindings = try container.decodeIfPresent(
+            HotkeyBindings.self,
+            forKey: .hotkeyBindings
+        ) ?? HotkeyBindings()
         hasSeenOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasSeenOnboarding) ?? false
         secureLocalModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .secureLocalModeEnabled) ?? false
         selectedLocalTranscriptionModelName = try container.decodeIfPresent(
