@@ -153,10 +153,14 @@ struct AppSettings: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hotkeyMode = try container.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode) ?? .hold
-        hotkeyBindings = try container.decodeIfPresent(
+        // Ein Formfehler nur bei hotkeyBindings darf nicht die gesamte
+        // AppSettings-Dekodierung scheitern lassen: loadContainer() faengt
+        // Fehler mit try? ab, das wuerde sonst alle Einstellungsgruppen auf
+        // Standard zuruecksetzen. Deshalb hier lokal abfangen.
+        hotkeyBindings = (try? container.decodeIfPresent(
             HotkeyBindings.self,
             forKey: .hotkeyBindings
-        ) ?? HotkeyBindings()
+        )) ?? HotkeyBindings()
         hasSeenOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasSeenOnboarding) ?? false
         secureLocalModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .secureLocalModeEnabled) ?? false
         selectedLocalTranscriptionModelName = try container.decodeIfPresent(

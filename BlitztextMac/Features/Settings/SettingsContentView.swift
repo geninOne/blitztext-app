@@ -1026,7 +1026,7 @@ struct CustomizeSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 VStack(spacing: 6) {
-                    ForEach(WorkflowType.mainMenuCases) { type in
+                    ForEach(WorkflowType.allCases) { type in
                         HotkeyRecorderRow(
                             type: type,
                             appState: appState,
