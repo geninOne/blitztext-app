@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 
 /// Nimmt eine Modifier-Kombination auf. Gemerkt wird die groesste gleichzeitig
-/// gehaltene Menge, uebernommen wird sie beim Loslassen aller Modifier.
+/// gehaltene Menge (bei gleicher Groesse gewinnt die zuletzt gehaltene),
+/// uebernommen wird sie beim Loslassen aller Modifier.
 @Observable
 @MainActor
 final class HotkeyRecorder {
@@ -57,7 +58,9 @@ final class HotkeyRecorder {
         let kombination = HotkeyCombo(flags: flags)
 
         guard kombination.isEmpty else {
-            if kombination.modifiers.count > groessteKombination.modifiers.count {
+            // Bei gleicher Groesse gewinnt die zuletzt gehaltene Menge, sonst
+            // bliebe eine Menge stehen, deren Tasten nicht mehr gedrueckt sind.
+            if kombination.modifiers.count >= groessteKombination.modifiers.count {
                 groessteKombination = kombination
             }
             return
