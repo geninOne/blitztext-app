@@ -50,7 +50,7 @@ jobs:
 
       - name: Verify versions match the tag
         if: startsWith(github.ref, 'refs/tags/v')
-        run: bash Scripts/check-release-version.sh "$GITHUB_REF_NAME"
+        run: bash scripts/check-release-version.sh "$GITHUB_REF_NAME"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -80,7 +80,7 @@ jobs:
             echo "::notice::Secret BLITZTEXT_UPDATE_PRIVATE_KEY fehlt, dieser Build bleibt ohne Signatur. Das .sig-Asset entsteht, sobald der Schluessel hinterlegt ist."
             exit 0
           fi
-          swift Scripts/sign-update.swift \
+          swift scripts/sign-update.swift \
             Blitztext-macos-universal.zip \
             Blitztext-macos-universal.zip.sig
           ls -lh Blitztext-macos-universal.zip.sig

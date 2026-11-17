@@ -75,8 +75,27 @@ enum BlitztextInstallLocationService {
         return .unknown
     }
 
+    /// Blackboat's Jamf installed Blitztext here, with the package of
+    /// `scripts/release-macos.sh` (identifier `app.blitztext.mac.pkg`, older packages `app.blitztext.mac`),
+    /// and keeps it current. The app then neither moves nor updates itself. Jamf of another
+    /// company, or any other device management, does not deliver Blitztext: there the
+    /// receipt is missing and Sparkle stays on. Public releases are ZIPs, never packages.
+    static let isManagedByJamf: Bool = {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: "/usr/local/jamf/bin/jamf") else { return false }
+        return ["app.blitztext.mac.pkg", "app.blitztext.mac"].contains { identifier in
+            fileManager.fileExists(atPath: "/var/db/receipts/\(identifier).plist")
+        }
+    }()
+
     static var shouldOfferMoveToApplications: Bool {
-        !currentInstallLocation.isCanonicalInstall
+        !currentInstallLocation.isCanonicalInstall && !isManagedByJamf && !isPreviewBuild
+    }
+
+    /// A design preview built next to the installed app (bundle ID `….preview`): it
+    /// lives outside /Applications on purpose.
+    static var isPreviewBuild: Bool {
+        Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true
     }
 
     static var systemApplicationsDirectoryURL: URL {
@@ -133,20 +152,33 @@ enum BlitztextInstallLocationService {
 
         try ensureDirectoryExists(at: destinationDirectoryURL)
 
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            guard replacingExisting else {
-                throw MoveError.destinationExists(destinationURL)
-            }
-            try FileManager.default.removeItem(at: destinationURL)
-        }
-
-        guard FileManager.default.isWritableFile(atPath: destinationDirectoryURL.path) else {
+        let fileManager = FileManager.default
+        guard fileManager.isWritableFile(atPath: destinationDirectoryURL.path) else {
             throw MoveError.destinationNotWritable(destinationDirectoryURL)
         }
 
+        let destinationExists = fileManager.fileExists(atPath: destinationURL.path)
+        if destinationExists && !replacingExisting {
+            throw MoveError.destinationExists(destinationURL)
+        }
+
+        // Copy next to the destination first and swap in one step, so a failed copy
+        // never costs the installation that works.
+        let stagingURL = destinationDirectoryURL
+            .appendingPathComponent(".\(sourceURL.lastPathComponent).incoming-\(UUID().uuidString)")
         do {
-            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            try fileManager.copyItem(at: sourceURL, to: stagingURL)
+            let executable = stagingURL.appendingPathComponent("Contents/MacOS")
+            guard fileManager.fileExists(atPath: executable.path) else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            if destinationExists {
+                _ = try fileManager.replaceItemAt(destinationURL, withItemAt: stagingURL)
+            } else {
+                try fileManager.moveItem(at: stagingURL, to: destinationURL)
+            }
         } catch {
+            try? fileManager.removeItem(at: stagingURL)
             throw MoveError.copyFailed(source: sourceURL, destination: destinationURL, underlying: error)
         }
 

@@ -25,150 +25,188 @@ enum HotkeyMode: String, Codable, CaseIterable, Identifiable {
 enum HotkeyEvent {
     case down(WorkflowType)  // Keys pressed
     case up(WorkflowType)    // Keys released (for hold mode)
-    case cancel              // Escape pressed
+    case escape              // Stops a running recording, in both modes
 }
 
 @Observable
 @MainActor
 final class HotkeyService {
-    /// Die aktuell vergebenen Kuerzel. Wird vom AppState gesetzt, keine View
-    /// liest sie direkt.
-    @ObservationIgnored
-    var bindings = HotkeyBindings()
-
-    var onHotkeyEvent: ((HotkeyEvent) -> Void)?
-
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var keyMonitor: Any?
-    /// Kombination, die gerade gehalten wird.
-    private var activeCombo: WorkflowType?
-    /// Laufende Wartezeit fuer eine Praefix-Kombination.
-    private var pendingTask: Task<Void, Never>?
-    /// Kombination und Workflow der laufenden Wartezeit, damit eine
-    /// Lockerung der Tasten die Entscheidung sofort fallen lassen kann.
-    private var pendingCombo: HotkeyCombo?
-    private var pendingType: WorkflowType?
-    /// Die zuletzt in handleFlags gesehene Kombination. firePending prueft
-    /// gegen diese und nicht gegen NSEvent.modifierFlags, damit Entscheidung
-    /// und Nachpruefung dieselbe Wahrheitsquelle haben.
-    private var lastSeenCombo = HotkeyCombo([])
-    /// Solange true, liefert der Dienst keine Ereignisse. Wird beim Aufnehmen
-    /// eines neuen Kuerzels in den Einstellungen gesetzt.
-    private var isSuspended = false
+    private var localKeyMonitor: Any?
+    private var activeCombo: WorkflowType?  // Which fn combo is currently held
+    private var activeCustomCombo: WorkflowType?  // Which custom shortcut is currently held
+    private let carbonRegistrar = CarbonHotkeyRegistrar()
+    private var customHotkeys: [WorkflowType: KeyCombo] = [:]
+    private var customHotkeysSuspended = false
+    /// Carbon ids per mode, stable while Blitztext runs (`HotkeyIDs`).
+    private var hotkeyIDs = HotkeyIDs()
+
+    var onHotkeyEvent: ((HotkeyEvent) -> Void)?
+    /// Whether a dictation is recording or being processed. Only then does Escape get taken
+    /// from the frontmost app.
+    var isWorkflowRunning: (() -> Bool)?
+    /// Escape ended a dictation while its keys were still held: ignore the keys until fn is
+    /// let go, so releasing one of three keys does not start a new dictation.
+    private var ignoresHeldKeys = false
+    /// Workflows whose custom shortcut macOS refused to register (e.g. already taken).
+    private(set) var failedCustomHotkeys: Set<WorkflowType> = []
+
+    init() {
+        carbonRegistrar.onEvent = { [weak self] id, pressed in
+            Task { @MainActor in
+                self?.handleCustomHotkey(id: id, pressed: pressed)
+            }
+        }
+    }
 
     func start() {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let flags = event.modifierFlags
             Task { @MainActor in
-                self?.handleFlags(flags)
+                self?.handleFlags(event)
             }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let flags = event.modifierFlags
             Task { @MainActor in
-                self?.handleFlags(flags)
+                self?.handleFlags(event)
             }
             return event
         }
-        // Escape key monitor for toggle mode
-        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let keyCode = event.keyCode
-            Task { @MainActor in
-                if keyCode == 53 { // Escape
-                    self?.handleEscape()
+        // Escape stops a recording: in other apps through the global monitor, which runs only
+        // while a dictation is active (see `setDictationActive`), and while the popover makes
+        // Blitztext frontmost (Drücken mode) through the local one.
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            let handled: Bool = MainActor.assumeIsolated {
+                guard let self, self.isWorkflowRunning?() == true else { return false }
+                self.handleEscape()
+                return true
+            }
+            return handled ? nil : event
+        }
+    }
+
+    /// Installs the global Escape monitor while a dictation records or is processed, and
+    /// removes it afterwards. Outside a dictation the app then receives no key events from
+    /// other apps at all; only fn/modifier changes and the registered shortcuts reach it.
+    func setDictationActive(_ active: Bool) {
+        if active {
+            guard keyMonitor == nil else { return }
+            keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                Task { @MainActor in
+                    if event.keyCode == 53 { // Escape
+                        self?.handleEscape()
+                    }
                 }
             }
+        } else if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
         }
     }
 
     func stop() {
-        cancelPending()
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let localKeyMonitor { NSEvent.removeMonitor(localKeyMonitor) }
         globalMonitor = nil
         localMonitor = nil
         keyMonitor = nil
+        localKeyMonitor = nil
+        carbonRegistrar.unregisterAll()
     }
 
-    /// Legt den Dienst still, ohne die Monitore abzubauen. Waehrend der
-    /// Aufnahme eines neuen Kuerzels darf kein Workflow starten.
-    func suspend() {
-        isSuspended = true
-        cancelPending()
-        activeCombo = nil
+    // MARK: - Custom Shortcuts
+
+    func updateCustomHotkeys(_ hotkeys: [WorkflowType: KeyCombo]) {
+        customHotkeys = hotkeys
+        registerCustomHotkeys()
     }
 
-    func resume() {
-        isSuspended = false
+    /// Temporarily disables all shortcuts (own and fn), e.g. while the user records a new one.
+    func setCustomHotkeysSuspended(_ suspended: Bool) {
+        guard customHotkeysSuspended != suspended else { return }
+        customHotkeysSuspended = suspended
+        registerCustomHotkeys()
     }
 
-    private func handleFlags(_ flags: NSEvent.ModifierFlags) {
-        guard !isSuspended else { return }
+    private func registerCustomHotkeys() {
+        carbonRegistrar.unregisterAll()
+        failedCustomHotkeys = []
+        guard !customHotkeysSuspended else { return }
 
-        let combo = HotkeyCombo(flags: flags)
-        lastSeenCombo = combo
-
-        if let ausstehenderTyp = pendingType, let ausstehendeCombo = pendingCombo,
-           !ausstehendeCombo.isStrictSubset(of: combo) {
-            // Die Tasten wurden gelockert statt erweitert: die ausstehende
-            // Entscheidung faellt jetzt, bevor die neuen Flags verarbeitet
-            // werden. Sonst bliebe ein kurzer Tipp auf ein
-            // Praefix-Kuerzel im Druecken-Modus wirkungslos.
-            cancelPending()
-            activeCombo = ausstehenderTyp
-            onHotkeyEvent?(.down(ausstehenderTyp))
-        } else {
-            cancelPending()
-        }
-
-        switch HotkeyMatcher(bindings: bindings).decision(for: combo, active: activeCombo) {
-        case .fire(let type):
-            activeCombo = type
-            onHotkeyEvent?(.down(type))
-
-        case .delayed(let type, let delay):
-            pendingCombo = combo
-            pendingType = type
-            pendingTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(delay))
-                guard !Task.isCancelled else { return }
-                self?.firePending(type, combo: combo)
+        for (type, combo) in customHotkeys {
+            if !carbonRegistrar.register(id: hotkeyIDs.id(for: type), combo: combo) {
+                failedCustomHotkeys.insert(type)
             }
-
-        case .release(let type):
-            activeCombo = nil
-            onHotkeyEvent?(.up(type))
-
-        case .none:
-            break
         }
     }
 
-    /// Feuert nach abgelaufener Wartezeit, aber nur wenn die Tasten unveraendert
-    /// gehalten werden.
-    private func firePending(_ type: WorkflowType, combo: HotkeyCombo) {
-        pendingTask = nil
-        pendingCombo = nil
-        pendingType = nil
-        guard !isSuspended, activeCombo == nil else { return }
-        guard lastSeenCombo == combo else { return }
-        activeCombo = type
-        onHotkeyEvent?(.down(type))
+    private func handleCustomHotkey(id: UInt32, pressed: Bool) {
+        guard let type = hotkeyIDs.type(for: id), customHotkeys[type] != nil || activeCustomCombo == type else { return }
+
+        if pressed {
+            // A missed key-up (e.g. while a password field had secure input) can leave an
+            // fn combo marked as held and would block every shortcut. fn is not down, so
+            // that combo is over.
+            if let stale = activeCombo, !NSEvent.modifierFlags.contains(.function) {
+                activeCombo = nil
+                onHotkeyEvent?(.up(stale))
+            }
+            guard activeCustomCombo == nil, activeCombo == nil else { return }
+            activeCustomCombo = type
+            onHotkeyEvent?(.down(type))
+        } else if activeCustomCombo == type {
+            activeCustomCombo = nil
+            onHotkeyEvent?(.up(type))
+        }
     }
 
-    private func cancelPending() {
-        pendingTask?.cancel()
-        pendingTask = nil
-        pendingCombo = nil
-        pendingType = nil
+    /// The built-in fn shortcuts. A mode with its own working shortcut does not
+    /// listen to its fn combo any more: the own shortcut replaces it.
+    private static let fnCombos: [(flags: NSEvent.ModifierFlags, type: WorkflowType)] = [
+        ([.function, .shift, .control], .localTapTalk),
+        ([.function, .shift], .tapTalk),
+        ([.function, .control], .textImprover),
+        ([.function, .option], .dampfAblassen),
+        ([.function, .command], .emojiText),
+    ]
+
+    private func isReplacedByCustomShortcut(_ type: WorkflowType) -> Bool {
+        customHotkeys[type] != nil && !failedCustomHotkeys.contains(type)
+    }
+
+    private func handleFlags(_ event: NSEvent) {
+        let flags = ShortcutModifiers.normalized(event.modifierFlags)
+        if ignoresHeldKeys {
+            guard !flags.contains(.function) else { return }
+            ignoresHeldKeys = false
+        }
+
+        if let match = Self.fnCombos.first(where: { $0.flags == flags }) {
+            if activeCombo == nil, !customHotkeysSuspended, !isReplacedByCustomShortcut(match.type) {
+                activeCombo = match.type
+                onHotkeyEvent?(.down(match.type))
+            }
+            return
+        }
+
+        // Keys released -- fire up event
+        if let combo = activeCombo {
+            activeCombo = nil
+            onHotkeyEvent?(.up(combo))
+        }
     }
 
     private func handleEscape() {
-        guard !isSuspended else { return }
-        cancelPending()
+        // Releasing the keys after Escape must neither stop again nor start anew.
+        ignoresHeldKeys = activeCombo != nil
+        activeCustomCombo = nil
         activeCombo = nil
-        onHotkeyEvent?(.cancel)
+        onHotkeyEvent?(.escape)
     }
+
+    nonisolated deinit {}
 }

@@ -11,108 +11,103 @@ final class TextImprovementWorkflow: Workflow {
     }
     var onOutput: WorkflowOutputHandler?
     var onPhaseChange: WorkflowPhaseChangeHandler?
+    var onKeptTranscript: WorkflowOutputHandler?
+    private(set) var transcript: String?
 
-    private let recorder = AudioRecorder()
+    private let dictation: DictationRun
     private let settings: TextImprovementSettings
     private let language: String
-    private let apiConfiguration: APIConfiguration
-    private var processingTask: Task<Void, Never>?
+    private let localModelName: String
+    private let rewriteEngine: TextRewriter.Engine
+    private let postProcessor: TranscriptPostProcessor
+    /// Text around the cursor for the AI step, nil when not allowed or not readable.
+    private let fieldContext: @MainActor () -> String?
 
-    init(settings: TextImprovementSettings, language: String = "de", apiConfiguration: APIConfiguration) {
+    init(
+        settings: TextImprovementSettings,
+        language: String = "de",
+        localModelName: String,
+        rewriteEngine: TextRewriter.Engine,
+        postProcessor: TranscriptPostProcessor = TranscriptPostProcessor(correctCustomTerms: false, removeFillerWords: false),
+        fieldContext: @escaping @MainActor () -> String? = { nil }
+    ) {
         self.settings = settings
         self.language = language
-        self.apiConfiguration = apiConfiguration
+        self.localModelName = localModelName
+        self.rewriteEngine = rewriteEngine
+        self.postProcessor = postProcessor
+        self.fieldContext = fieldContext
+        dictation = DictationRun(recorder: AudioRecorder())
+        dictation.onPhase = { [weak self] phase in self?.phase = phase }
+        dictation.onOutput = { [weak self] text in self?.onOutput?(text) }
+        dictation.onKeptTranscript = { [weak self] text in self?.onKeptTranscript?(text) }
     }
 
     // MARK: - Recording State
 
-    var isRecording: Bool { recorder.isRecording }
-    var audioLevel: Float { recorder.audioLevel }
+    var isRecording: Bool { dictation.isRecording }
+    var audioLevel: Float { dictation.audioLevel }
 
     // MARK: - Workflow Protocol
 
     func start() {
-        phase = .running("Aufnahme läuft ...")
-        recorder.startRecording()
-
-        if let error = recorder.errorMessage {
-            phase = .error(error)
-        }
+        dictation.start()
     }
 
     func stop() {
-        if recorder.isRecording {
-            recorder.stopRecording()
-            guard !TranscriptionQualityService.shouldRejectRecording(duration: recorder.lastRecordingDuration) else {
-                recorder.discardRecording()
-                phase = .error("Keine Aufnahme erkannt.")
-                return
-            }
-            processRecording()
-        } else {
-            processingTask?.cancel()
-            phase = .idle
-        }
+        dictation.stop(processing: process)
     }
 
     func reset() {
-        processingTask?.cancel()
-        if recorder.isRecording {
-            recorder.stopRecording()
-        }
-        recorder.discardRecording()
-        phase = .idle
+        dictation.cancel()
     }
 
     // MARK: - Two-Phase Processing: Whisper -> GPT
 
-    private func processRecording() {
-        guard let url = recorder.recordingURL else {
-            phase = .error("Keine Aufnahme vorhanden.")
-            return
+    private func process(
+        _ recording: URL,
+        seconds recordingDuration: TimeInterval,
+        step: @escaping @MainActor (String) -> Void
+    ) async throws -> String? {
+        // Phase 1: local transcription (Parakeet or WhisperKit)
+        let rawText = try await LocalTranscriptionService.transcribe(
+            audioURL: recording,
+            language: language,
+            modelName: localModelName
+        ) {
+            step(LocalTranscriptionService.slowPreparationMessage)
+        }
+        let cleanedRawText = TranscriptionQualityService.cleanedTranscript(rawText)
+        guard !TranscriptionQualityService.isLikelyArtifact(cleanedRawText, recordingDuration: recordingDuration) else {
+            return nil
         }
 
-        phase = .running("Wird transkribiert ...")
-        let recordingDuration = recorder.lastRecordingDuration
-        let vocabularyHints = recordingDuration >= 0.9 ? settings.customTerms : []
+        let processedRawText = postProcessor.process(cleanedRawText)
+        guard !processedRawText.isEmpty else { return nil }
 
-        processingTask = Task {
-            defer {
-                try? FileManager.default.removeItem(at: url)
-            }
+        // Cancelled meanwhile (Escape): no AI step for a text that is not pasted.
+        try Task.checkCancellation()
+        transcript = processedRawText
 
-            do {
-                // Phase 1: Whisper transcription
-                let rawText = try await TranscriptionService.transcribe(
-                    audioURL: url,
-                    customTerms: vocabularyHints,
-                    language: language,
-                    config: apiConfiguration
-                )
-                let cleanedRawText = TranscriptionQualityService.cleanedTranscript(rawText)
-                guard !TranscriptionQualityService.isLikelyArtifact(cleanedRawText, recordingDuration: recordingDuration) else {
-                    phase = .error("Keine Aufnahme erkannt.")
-                    return
-                }
+        // Phase 2: AI improvement (on device or the connected provider)
+        step("Text wird verbessert ...")
 
-                if Task.isCancelled { return }
-
-                // Phase 2: GPT improvement
-                phase = .running("Text wird verbessert ...")
-
-                let improved = try await LLMService.improve(
-                    text: cleanedRawText,
-                    settings: settings,
-                    config: apiConfiguration
-                )
-
-                let cleanedImproved = TranscriptionQualityService.cleanedTranscript(improved)
-                phase = .done(cleanedImproved)
-                onOutput?(cleanedImproved)
-                recordDictationHistory(workflow: type, audioURL: url, input: cleanedRawText, output: cleanedImproved)
-            } catch {
-                phase = .error(error.localizedDescription)
-            }
+        // A failure keeps what was said (`AIStepFailed`).
+        let improved: String
+        do {
+            improved = try await TextRewriter.rewrite(
+                processedRawText,
+                instruction: ModePrompts.withFieldContext(
+                    ModePrompts.textImprovement(settings, language: PromptLanguage.of(processedRawText)),
+                    context: fieldContext(),
+                    language: PromptLanguage.of(processedRawText)
+                ),
+                engine: rewriteEngine,
+                purpose: .editTranscript
+            )
+        } catch {
+            throw AIStepFailed.wrapping(error, transcript: processedRawText)
         }
+        return TranscriptionQualityService.cleanedTranscript(improved)
     }
 }

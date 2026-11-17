@@ -1,0 +1,185 @@
+import Foundation
+import CoreML
+import FluidAudio
+
+/// Local transcription with Parakeet via FluidAudio (Apache-2.0): Parakeet Ultra by Moondream,
+/// a post-training of NVIDIA Parakeet TDT 0.6B v3 (both CC BY 4.0). Macs that downloaded v3
+/// with an earlier version keep using it until the background upgrade to Ultra is done.
+/// Runs on the Apple Neural Engine, on Intel Macs on the processor, and supports 25 European
+/// languages including German.
+actor ParakeetTranscriber {
+    static let shared = ParakeetTranscriber()
+
+    /// Settings key of the Parakeet entry, kept from the v3 days so existing choices stay.
+    static let modelName = "parakeet-tdt-0.6b-v3"
+    static let licenseURL = URL(string: "https://creativecommons.org/licenses/by/4.0/")!
+
+    static var files: ParakeetModelFiles {
+        ParakeetModelFiles(parent: AppSupportPaths.localModelsDirectoryURL.appendingPathComponent("parakeet", isDirectory: true))
+    }
+
+    /// An earlier v3 download is in use because Ultra is not on disk yet.
+    static var usesLegacyModel: Bool {
+        files.installed == .legacy
+    }
+
+    static var displayName: String {
+        usesLegacyModel ? "Parakeet v3" : "Parakeet Ultra"
+    }
+
+    static var modelPageURL: URL {
+        usesLegacyModel
+            ? URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")!
+            : URL(string: "https://huggingface.co/moondream/parakeet-ultra")!
+    }
+
+    /// Credit required by CC BY 4.0, as Markdown with the license link.
+    static var attribution: String {
+        let license = "[CC BY 4.0](\(licenseURL.absoluteString))"
+        return usesLegacyModel
+            ? "Parakeet TDT 0.6B v3 von NVIDIA, \(license), via FluidAudio."
+            : "Parakeet Ultra von Moondream, nachtrainiert aus NVIDIA Parakeet TDT 0.6B v3, \(license), via FluidAudio."
+    }
+
+    /// The folder of the build in use, or of Ultra before anything is downloaded.
+    static var modelsDirectoryURL: URL {
+        files.directory(for: files.installed ?? .ultra)
+    }
+
+    static var isInstalled: Bool {
+        files.installed != nil
+    }
+
+    static var needsUpgrade: Bool {
+        files.installed == .legacy
+    }
+
+    private var manager: AsrManager?
+    private var managerBuild: ParakeetModelFiles.Build?
+    /// The load in flight. Actor methods are reentrant at `await`, so without this a
+    /// second dictation during a slow load started another full model load.
+    private var loadTask: Task<AsrManager, Error>?
+    private var loadTaskBuild: ParakeetModelFiles.Build?
+    private var downloadTask: Task<Void, Error>?
+
+    var isReady: Bool {
+        manager != nil && managerBuild == Self.files.installed
+    }
+
+    func download(progressHandler: @escaping @Sendable (Double) -> Void) async throws {
+        try await downloadUltra(progressHandler: progressHandler)
+        progressHandler(1)
+    }
+
+    /// Replaces an earlier v3 download with Ultra. Dictation keeps using v3 until Ultra is
+    /// downloaded and loaded; then the v3 files are deleted.
+    func upgrade() async throws {
+        guard Self.needsUpgrade else { return }
+        try await downloadUltra { _ in }
+        try await prepare()
+        Self.files.removeLegacyIfUpgraded()
+    }
+
+    func prepare() async throws {
+        _ = try await loadedManager()
+    }
+
+    /// The hint given to the model. A code such as "de" nudges Parakeet towards that language,
+    /// which helps on very short or quiet recordings. `TranscriptionSettings.automaticLanguage`
+    /// or an empty value means no hint: the model detects the language of each dictation.
+    static func languageHint(_ language: String) -> Language? {
+        let code = language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !code.isEmpty, code != TranscriptionSettings.automaticLanguage else { return nil }
+        return Language(rawValue: code)
+    }
+
+    func transcribe(audioURL: URL, language: String) async throws -> String {
+        let manager = try await loadedManager()
+        var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+        let result = try await manager.transcribe(audioURL, decoderState: &decoderState, language: Self.languageHint(language))
+        return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Transcribes a whole file and returns its words with timestamps, e.g. for
+    /// assigning a meeting transcript to speakers.
+    func transcribeWords(audioURL: URL, language: String) async throws -> [TimedWord] {
+        let manager = try await loadedManager()
+        var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+        let result = try await manager.transcribe(audioURL, decoderState: &decoderState, language: Self.languageHint(language))
+        return TimedWord.words(from: (result.tokenTimings ?? []).map { ($0.token, $0.startTime, $0.endTime) })
+    }
+
+    /// One download at a time, whether the user started it or the upgrade did.
+    private func downloadUltra(progressHandler: @escaping @Sendable (Double) -> Void) async throws {
+        if let downloadTask {
+            return try await downloadTask.value
+        }
+        let files = Self.files
+        let task = Task<Void, Error> {
+            // Into the staging folder first, then into place in one step: a download cut short
+            // straight in place left folders without weights, which FluidAudio counts as there,
+            // so every further download ended at once and Ultra never became usable.
+            guard files.installed != .ultra else { return }
+            let staged = files.stagedUltraDirectory
+            try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(), withIntermediateDirectories: true)
+            _ = try await AsrModels.download(to: staged, force: files.stagedUltraIsCutShort, version: .ultra) { progress in
+                let fraction = progress.fractionCompleted
+                progressHandler(fraction.isFinite ? min(max(fraction, 0), 1) : 0)
+            }
+            try? files.installStagedUltra()
+            // Still incomplete: said so, also while v3 is there and keeps working. The next
+            // download starts over (`stagedUltraIsCutShort`).
+            guard files.installed == .ultra else {
+                throw LocalTranscriptionError.downloadedModelInvalid(ParakeetTranscriber.modelName)
+            }
+        }
+        downloadTask = task
+        defer { downloadTask = nil }
+        try await task.value
+    }
+
+    /// FluidAudio's default on Apple Silicon (Neural Engine). Intel Macs have none: there the
+    /// models run on the processor, as checked with the x86_64 build.
+    private static var configuration: MLModelConfiguration? {
+        #if arch(x86_64)
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuOnly
+        return configuration
+        #else
+        return nil
+        #endif
+    }
+
+    /// The loaded model, reloaded when the build on disk changed (v3 to Ultra).
+    private func loadedManager() async throws -> AsrManager {
+        guard let build = Self.files.installed else {
+            throw LocalTranscriptionError.modelMissing(Self.modelsDirectoryURL)
+        }
+        if let manager, managerBuild == build {
+            return manager
+        }
+        if let loadTask, loadTaskBuild == build {
+            return try await loadTask.value
+        }
+
+        let directory = Self.files.directory(for: build)
+        let task = Task<AsrManager, Error> {
+            let models = try await AsrModels.load(from: directory, configuration: Self.configuration, version: build.version)
+            let manager = AsrManager(config: .default)
+            try await manager.loadModels(models)
+            return manager
+        }
+        loadTask = task
+        loadTaskBuild = build
+        defer {
+            if loadTaskBuild == build {
+                loadTask = nil
+                loadTaskBuild = nil
+            }
+        }
+        let manager = try await task.value
+        self.manager = manager
+        managerBuild = build
+        return manager
+    }
+}

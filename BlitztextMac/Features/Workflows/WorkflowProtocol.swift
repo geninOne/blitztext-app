@@ -1,39 +1,6 @@
 import Foundation
 
-// MARK: - Output Destination
-
-/// Wohin das Ergebnis eines Workflows geht. Alle bisherigen Workflows setzen
-/// den Text am Cursor ein, das Diktat schreibt in die Tagesdatei im Vault.
-enum WorkflowOutputDestination {
-    case cursor
-    case vaultInbox
-}
-
-extension WorkflowType {
-    var outputDestination: WorkflowOutputDestination {
-        switch self {
-        case .vaultDictation: return .vaultInbox
-        case .transcription, .localTranscription, .textImprover, .dampfAblassen, .emojiText:
-            return .cursor
-        }
-    }
-}
-
 // MARK: - Workflow State
-
-enum WorkflowPhase: Equatable {
-    case idle
-    case running(String)
-    case done(String)
-    case error(String)
-
-    var isActive: Bool {
-        switch self {
-        case .idle: return false
-        default: return true
-        }
-    }
-}
 
 enum WorkflowLaunchSource: Equatable {
     case manual
@@ -59,191 +26,210 @@ protocol Workflow: AnyObject, Observable {
     var type: WorkflowType { get }
     var phase: WorkflowPhase { get set }
     var isRecording: Bool { get }
+    /// Input level 0...1 while recording, for the waveforms.
+    var audioLevel: Float { get }
     var onOutput: WorkflowOutputHandler? { get set }
     var onPhaseChange: WorkflowPhaseChangeHandler? { get set }
+    /// What was said, word for word, before an AI mode rewrote it; nil for plain dictation.
+    var transcript: String? { get }
+    /// An AI mode failed on a finished transcript: the word-for-word text to keep.
+    var onKeptTranscript: WorkflowOutputHandler? { get set }
 
     func start()
     func stop()
     func reset()
 }
 
-// MARK: - App Settings
-
-/// Backend that handles the remote (online) requests: either OpenAI directly
-/// or an OpenAI-compatible proxy such as a LiteLLM gateway.
-enum APIProvider: String, Codable, CaseIterable, Identifiable {
-    case openAI
-    case liteLLM
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .openAI: return "OpenAI"
-        case .liteLLM: return "LiteLLM Gateway"
-        }
+extension Workflow {
+    var transcript: String? { nil }
+    /// Plain dictation has no AI step that could fail.
+    var onKeptTranscript: WorkflowOutputHandler? {
+        get { nil }
+        set {}
     }
 }
 
+// MARK: - App Settings
+
 struct AppSettings: Codable {
     var hotkeyMode: HotkeyMode = .hold
-    var hotkeyBindings: HotkeyBindings = HotkeyBindings()
     var hasSeenOnboarding: Bool = false
-    var secureLocalModeEnabled: Bool = false
-    var selectedLocalTranscriptionModelName: String = LocalTranscriptionService.recommendedFastModelName
+    /// Where Blitztext+, $%&! and :) run their AI step. Transcription is always local.
+    var rewriteEngine: TextRewriter.Engine = .automatic
+    var selectedLocalTranscriptionModelName: String = LocalTranscriptionService.initialModelName
     var hasAutoSelectedFastLocalModel: Bool = false
-
-    // Remote provider selection. `openAI` keeps the original direct-to-OpenAI path.
-    var apiProvider: APIProvider = .openAI
-    var liteLLMBaseURL: String = ""
-    var liteLLMFastModel: String = "gpt-4o-mini"
-    var liteLLMStrongModel: String = "gpt-4o"
-    var liteLLMTranscriptionModel: String = "whisper-1"
-
-    // Automatische Update-Pruefung, hoechstens einmal pro Kalendertag.
-    var automaticUpdateChecksEnabled: Bool = true
-    var lastUpdateCheck: Date?
+    /// The one-time switch from Whisper Small to Parakeet Ultra for Macs without a model ran.
+    var hasCheckedParakeetDefault: Bool = false
+    /// Macs that already had a model when the setup assistant arrived were marked as set up.
+    var hasMigratedToSetupAssistant: Bool = false
+    /// Optional shortcuts per workflow (keyed by `WorkflowType.rawValue`) for non-Apple keyboards.
+    /// The only shortcut an own mode can have.
+    var customHotkeys: [String: KeyCombo] = [:]
+    var restoreClipboardAfterPaste: Bool = true
+    var correctCustomTermsEnabled: Bool = true
+    var removeFillerWordsEnabled: Bool = true
+    var historyRetention: HistoryRetention = .day
+    /// `WhatsNew.version` the user already confirmed; nil before the first note.
+    var lastSeenWhatsNewVersion: String?
+    /// "Modus je App": the Blitztext shortcut uses another mode in these apps.
+    var appModeRules: [AppModeRule] = []
+    /// The same for websites in a browser, e.g. Gmail. Wins over a rule for the browser.
+    var websiteModeRules: [WebsiteModeRule] = []
+    /// Spaces and capitals of a dictation follow the text around the cursor.
+    var fitToSurroundingText: Bool = true
+    /// The AI modes get the text around the cursor as context (like the iOS keyboard).
+    var aiSeesFieldContext: Bool = false
+    /// The Mac's sound output is muted while Blitztext records.
+    var muteOutputWhileRecording: Bool = true
+    /// Long word-for-word dictation gets paragraph breaks at sentence ends.
+    var automaticParagraphs: Bool = false
+    /// A small lilac pill at the bottom of the screen while recording and processing.
+    var showsRecordingIndicator: Bool = true
+    /// Write the summary right after a meeting. Off: transcript by person only, faster;
+    /// the summary can still be created later.
+    var summarizesMeetings: Bool = true
+    /// The user's own modes ("Eigene Modi"), in menu order.
+    var customModes: [CustomMode] = []
+    /// E-Mail and Stichpunkte were added once, as on iOS; deleting them later sticks.
+    var hasSeededCustomModes: Bool = false
+    /// German as in Germany and Austria, or as in Switzerland and Liechtenstein.
+    var germanVariant: GermanVariant = .automatic
 
     init(
         hotkeyMode: HotkeyMode = .hold,
-        hotkeyBindings: HotkeyBindings = HotkeyBindings(),
         hasSeenOnboarding: Bool = false,
-        secureLocalModeEnabled: Bool = false,
-        selectedLocalTranscriptionModelName: String = LocalTranscriptionService.recommendedFastModelName,
-        hasAutoSelectedFastLocalModel: Bool = false,
-        apiProvider: APIProvider = .openAI,
-        liteLLMBaseURL: String = "",
-        liteLLMFastModel: String = "gpt-4o-mini",
-        liteLLMStrongModel: String = "gpt-4o",
-        liteLLMTranscriptionModel: String = "whisper-1",
-        automaticUpdateChecksEnabled: Bool = true,
-        lastUpdateCheck: Date? = nil
+        selectedLocalTranscriptionModelName: String = LocalTranscriptionService.initialModelName,
+        hasAutoSelectedFastLocalModel: Bool = false
     ) {
         self.hotkeyMode = hotkeyMode
-        self.hotkeyBindings = hotkeyBindings
         self.hasSeenOnboarding = hasSeenOnboarding
-        self.secureLocalModeEnabled = secureLocalModeEnabled
         self.selectedLocalTranscriptionModelName = selectedLocalTranscriptionModelName
         self.hasAutoSelectedFastLocalModel = hasAutoSelectedFastLocalModel
-        self.apiProvider = apiProvider
-        self.liteLLMBaseURL = liteLLMBaseURL
-        self.liteLLMFastModel = liteLLMFastModel
-        self.liteLLMStrongModel = liteLLMStrongModel
-        self.liteLLMTranscriptionModel = liteLLMTranscriptionModel
-        self.automaticUpdateChecksEnabled = automaticUpdateChecksEnabled
-        self.lastUpdateCheck = lastUpdateCheck
     }
 
     enum CodingKeys: String, CodingKey {
         case hotkeyMode
-        case hotkeyBindings
         case hasSeenOnboarding
-        case secureLocalModeEnabled
+        case rewriteEngine
         case selectedLocalTranscriptionModelName
         case hasAutoSelectedFastLocalModel
-        case apiProvider
-        case liteLLMBaseURL
-        case liteLLMFastModel
-        case liteLLMStrongModel
-        case liteLLMTranscriptionModel
-        case automaticUpdateChecksEnabled
-        case lastUpdateCheck
+        case hasCheckedParakeetDefault
+        case hasMigratedToSetupAssistant
+        case customHotkeys
+        case restoreClipboardAfterPaste
+        case correctCustomTermsEnabled
+        case removeFillerWordsEnabled
+        case historyRetention
+        case lastSeenWhatsNewVersion
+        case appModeRules
+        case websiteModeRules
+        case fitToSurroundingText
+        case aiSeesFieldContext
+        case muteOutputWhileRecording
+        case automaticParagraphs
+        case showsRecordingIndicator
+        case summarizesMeetings
+        case customModes
+        case hasSeededCustomModes
+        case germanVariant
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hotkeyMode = try container.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode) ?? .hold
-        // Ein Formfehler nur bei hotkeyBindings darf nicht die gesamte
-        // AppSettings-Dekodierung scheitern lassen: loadContainer() faengt
-        // Fehler mit try? ab, das wuerde sonst alle Einstellungsgruppen auf
-        // Standard zuruecksetzen. Deshalb hier lokal abfangen.
-        hotkeyBindings = (try? container.decodeIfPresent(
-            HotkeyBindings.self,
-            forKey: .hotkeyBindings
-        )) ?? HotkeyBindings()
         hasSeenOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasSeenOnboarding) ?? false
-        secureLocalModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .secureLocalModeEnabled) ?? false
+        rewriteEngine = try container.decodeIfPresent(TextRewriter.Engine.self, forKey: .rewriteEngine) ?? .automatic
         selectedLocalTranscriptionModelName = try container.decodeIfPresent(
             String.self,
             forKey: .selectedLocalTranscriptionModelName
-        ) ?? LocalTranscriptionService.recommendedFastModelName
+        ) ?? LocalTranscriptionService.initialModelName
         hasAutoSelectedFastLocalModel = try container.decodeIfPresent(
             Bool.self,
             forKey: .hasAutoSelectedFastLocalModel
         ) ?? false
-        apiProvider = try container.decodeIfPresent(APIProvider.self, forKey: .apiProvider) ?? .openAI
-        liteLLMBaseURL = try container.decodeIfPresent(String.self, forKey: .liteLLMBaseURL) ?? ""
-        liteLLMFastModel = try container.decodeIfPresent(String.self, forKey: .liteLLMFastModel) ?? "gpt-4o-mini"
-        liteLLMStrongModel = try container.decodeIfPresent(String.self, forKey: .liteLLMStrongModel) ?? "gpt-4o"
-        liteLLMTranscriptionModel = try container.decodeIfPresent(
-            String.self,
-            forKey: .liteLLMTranscriptionModel
-        ) ?? "whisper-1"
-        automaticUpdateChecksEnabled = try container.decodeIfPresent(
-            Bool.self,
-            forKey: .automaticUpdateChecksEnabled
-        ) ?? true
-        lastUpdateCheck = try container.decodeIfPresent(Date.self, forKey: .lastUpdateCheck)
+        hasCheckedParakeetDefault = try container.decodeIfPresent(Bool.self, forKey: .hasCheckedParakeetDefault) ?? false
+        hasMigratedToSetupAssistant = try container.decodeIfPresent(Bool.self, forKey: .hasMigratedToSetupAssistant) ?? false
+        customHotkeys = (try? container.decodeIfPresent([String: KeyCombo].self, forKey: .customHotkeys)) ?? [:]
+        restoreClipboardAfterPaste = try container.decodeIfPresent(Bool.self, forKey: .restoreClipboardAfterPaste) ?? true
+        correctCustomTermsEnabled = try container.decodeIfPresent(Bool.self, forKey: .correctCustomTermsEnabled) ?? true
+        removeFillerWordsEnabled = try container.decodeIfPresent(Bool.self, forKey: .removeFillerWordsEnabled) ?? true
+        historyRetention = (try? container.decodeIfPresent(HistoryRetention.self, forKey: .historyRetention)) ?? .day
+        lastSeenWhatsNewVersion = try container.decodeIfPresent(String.self, forKey: .lastSeenWhatsNewVersion)
+        appModeRules = (try? container.decodeIfPresent([AppModeRule].self, forKey: .appModeRules)) ?? []
+        websiteModeRules = (try? container.decodeIfPresent([WebsiteModeRule].self, forKey: .websiteModeRules)) ?? []
+        fitToSurroundingText = try container.decodeIfPresent(Bool.self, forKey: .fitToSurroundingText) ?? true
+        aiSeesFieldContext = try container.decodeIfPresent(Bool.self, forKey: .aiSeesFieldContext) ?? false
+        muteOutputWhileRecording = try container.decodeIfPresent(Bool.self, forKey: .muteOutputWhileRecording) ?? true
+        automaticParagraphs = try container.decodeIfPresent(Bool.self, forKey: .automaticParagraphs) ?? false
+        showsRecordingIndicator = try container.decodeIfPresent(Bool.self, forKey: .showsRecordingIndicator) ?? true
+        summarizesMeetings = try container.decodeIfPresent(Bool.self, forKey: .summarizesMeetings) ?? true
+        customModes = (try? container.decodeIfPresent([CustomMode].self, forKey: .customModes)) ?? []
+        hasSeededCustomModes = try container.decodeIfPresent(Bool.self, forKey: .hasSeededCustomModes) ?? false
+        germanVariant = (try? container.decodeIfPresent(GermanVariant.self, forKey: .germanVariant)) ?? .automatic
     }
-}
 
-enum TranscriptionBackend: String, Codable {
-    case remote
-    case local
+    func customHotkey(for type: WorkflowType) -> KeyCombo? {
+        customHotkeys[type.rawValue]
+    }
+
+    /// Own shortcuts of the modes that exist; a deleted own mode's leftovers do not register.
+    var resolvedCustomHotkeys: [WorkflowType: KeyCombo] {
+        CustomModeLinks.resolvedHotkeys(customHotkeys, modes: customModes)
+    }
+
+    func customMode(id: String) -> CustomMode? {
+        customModes.first { $0.id == id }
+    }
+
+    /// Removes an own mode with its shortcut; its app and website rules go back to Blitztext.
+    mutating func deleteCustomMode(id: String) {
+        var modes = customModes
+        var hotkeys = customHotkeys
+        var appRules = appModeRules
+        var websiteRules = websiteModeRules
+        CustomModeLinks.delete(id: id, modes: &modes, hotkeys: &hotkeys, appRules: &appRules, websiteRules: &websiteRules)
+        customModes = modes
+        customHotkeys = hotkeys
+        appModeRules = appRules
+        websiteModeRules = websiteRules
+    }
+
+    /// Tidies shortcuts and rules of own modes that no longer exist.
+    mutating func removeCustomModeOrphans() {
+        var hotkeys = customHotkeys
+        var appRules = appModeRules
+        var websiteRules = websiteModeRules
+        CustomModeLinks.removeOrphans(modes: customModes, hotkeys: &hotkeys, appRules: &appRules, websiteRules: &websiteRules)
+        customHotkeys = hotkeys
+        appModeRules = appRules
+        websiteModeRules = websiteRules
+    }
 }
 
 // MARK: - Workflow Settings
 
 struct TranscriptionSettings: Codable {
+    /// What the user dictates: a language code that Parakeet gets as a hint, or
+    /// `automaticLanguage`. "de" stays the default: most dictations are German, and on very
+    /// short or quiet German recordings the hint keeps Parakeet from switching languages.
     var language: String = "de"
+
+    /// No hint: Parakeet detects the language of each dictation. For people who dictate in
+    /// several languages; an English dictation is then not pulled towards German.
+    static let automaticLanguage = TranscriptPostProcessor.automaticLanguage
+
+    /// The choices offered in the settings. Parakeet Ultra covers 25 European languages;
+    /// the list names the common ones, the automatic option covers the rest.
+    static let languageOptions: [(code: String, label: String)] = [
+        ("de", "Deutsch"),
+        ("en", "Englisch"),
+        ("fr", "Französisch"),
+        ("es", "Spanisch"),
+        ("it", "Italienisch"),
+        ("nl", "Niederländisch"),
+        (automaticLanguage, "Automatisch erkennen"),
+    ]
+
+    var usesAutomaticLanguage: Bool { language == Self.automaticLanguage }
 }
 
-struct DampfAblassenSettings: Codable {
-    var systemPrompt: String = "Du erhältst ein emotional gesprochenes Transkript. Erkenne zuerst das eigentliche Ziel, Anliegen und den wahren Frust der Person. Formuliere daraus eine klare, respektvolle und wirksame Nachricht, mit der die Person ihr Ziel eher erreicht. Bewahre relevante Fakten, konkrete Probleme, Grenzen, Erwartungen und die nötige Dringlichkeit. Entferne Beleidigungen, Drohungen, Sarkasmus, Unterstellungen und unnötige Eskalation. Wenn mehrere Vorwürfe genannt werden, verdichte sie auf die entscheidenden Kernpunkte. Der Ton soll ruhig, menschlich, bestimmt und lösungsorientiert sein. Gib NUR die fertige Nachricht zurück."
-    var customName: String = ""
-}
-
-struct EmojiTextSettings: Codable {
-    var emojiDensity: EmojiDensity = .mittel
-    var customName: String = ""
-
-    enum EmojiDensity: String, Codable, CaseIterable, Identifiable {
-        case wenig
-        case mittel
-        case viel
-
-        var id: String { rawValue }
-
-        var displayName: String {
-            switch self {
-            case .wenig: return "Wenig"
-            case .mittel: return "Mittel"
-            case .viel: return "Viel"
-            }
-        }
-    }
-}
-
-struct TextImprovementSettings: Codable {
-    var systemPrompt: String = ""
-    var customTerms: [String] = []
-    var context: String = ""
-    var tone: TextTone = .neutral
-    var customName: String = ""
-
-    enum TextTone: String, Codable, CaseIterable, Identifiable {
-        case formal
-        case neutral
-        case casual
-
-        var id: String { rawValue }
-
-        var displayName: String {
-            switch self {
-            case .formal: return "Formell"
-            case .neutral: return "Neutral"
-            case .casual: return "Locker"
-            }
-        }
-    }
-}

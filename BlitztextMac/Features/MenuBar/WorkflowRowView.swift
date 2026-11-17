@@ -3,68 +3,66 @@ import SwiftUI
 struct WorkflowRowView: View {
     let type: WorkflowType
     let enabled: Bool
-    let hotkeyLabel: String
     var customName: String? = nil
     var subtitle: String? = nil
+    var hotkeyLabel: String? = nil
+    /// One line per mode for the main page: the name and its shortcut, the description is
+    /// the tooltip. Seven modes then fit without a list that scrolls inside the page.
+    var compact = false
     let action: () -> Void
 
     @State private var isHovered = false
 
+    private var badgeLabel: String { hotkeyLabel ?? type.hotkeyLabel }
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                // Icon with monochrome background
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.primary.opacity(isHovered ? 0.1 : 0.06))
-                        .frame(width: 36, height: 36)
+            HStack(alignment: .center, spacing: 12) {
+                ModeIcon(type: type, size: compact ? 26 : 34)
+                    .opacity(enabled ? 1 : 0.45)
 
-                    Image(systemName: type.icon)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-
-                // Name + subtitle
                 VStack(alignment: .leading, spacing: 2) {
                     Text(customName ?? type.displayName)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.ui(13.5, .semibold))
                         .foregroundStyle(enabled ? .primary : .tertiary)
                         .lineLimit(1)
 
-                    Text(subtitle ?? type.subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(enabled ? .secondary : .quaternary)
-                        .lineLimit(1)
+                    if !compact {
+                        Text(subtitle ?? type.subtitle)
+                            .font(.ui(11.5))
+                            .foregroundStyle(enabled ? .secondary : .quaternary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
 
-                Spacer()
+                Spacer(minLength: 6)
 
-                // Hotkey badge
-                HotkeyBadge(label: hotkeyLabel, enabled: enabled)
-                    .opacity(enabled ? 1 : 0.4)
+                // An own mode without its own shortcut has none to show.
+                if !badgeLabel.isEmpty {
+                    HotkeyBadge(label: badgeLabel, enabled: enabled)
+                        .opacity(enabled ? 1 : 0.4)
+                }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, compact ? 5 : 9)
             .background(
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(isHovered && enabled ? Color.primary.opacity(0.05) : Color.clear)
             )
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.5)
+        .help(compact ? (subtitle ?? type.subtitle) : "Startet \(customName ?? type.displayName)")
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) {
                 isHovered = hovering
             }
         }
     }
-
 }
-
-// MARK: - Hotkey Badge
 
 struct HotkeyBadge: View {
     let label: String
@@ -111,9 +109,7 @@ struct HotkeyBadge: View {
                 : Color.black.opacity(0.035)
         }
 
-        return colorScheme == .dark
-            ? Color.white.opacity(0.12)
-            : Color.black.opacity(0.09)
+        return BlitztextTheme.inset
     }
 
     private var keyStrokeColor: Color {

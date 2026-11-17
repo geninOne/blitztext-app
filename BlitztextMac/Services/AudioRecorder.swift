@@ -2,7 +2,7 @@ import AVFoundation
 import Observation
 
 @Observable
-final class AudioRecorder: NSObject, AVAudioRecorderDelegate {
+final class AudioRecorder: NSObject, AVAudioRecorderDelegate, DictationRecorder {
     var isRecording = false
     var recordingURL: URL?
     var errorMessage: String?
@@ -11,39 +11,79 @@ final class AudioRecorder: NSObject, AVAudioRecorderDelegate {
 
     private var audioRecorder: AVAudioRecorder?
     private var levelTimer: Timer?
-    private var currentFileURL: URL?
 
-    private func makeRecordingURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("blitztext-\(UUID().uuidString).m4a")
+    /// One file per recording: deleting one after its transcription never hits the next.
+    private var fileURL = AudioRecorder.newFileURL()
+
+    /// Uncompressed: nothing has to be encoded while recording and decoded again right after,
+    /// a step that left the models without audio on macOS 27.2 (public issue #40).
+    private static func newFileURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("recording-\(UUID().uuidString).wav")
+    }
+
+    /// Deletes this recorder's audio, for recordings that are not transcribed.
+    func discardRecording() {
+        try? FileManager.default.removeItem(at: fileURL)
+        recordingURL = nil
+    }
+
+    /// Recordings a crash or quit left behind, with their padded copies (`AudioPadding`), the
+    /// stretches of live notes and the converted and streamed copies of meeting and audio file
+    /// sound; nothing records or transcribes while the app starts.
+    static func removeLeftoverRecordings() {
+        let temp = FileManager.default.temporaryDirectory
+        let files = (try? FileManager.default.contentsOfDirectory(at: temp, includingPropertiesForKeys: nil)) ?? []
+        for file in files {
+            let name = file.lastPathComponent
+            let leftover = (name.hasPrefix("recording") && ["wav", "m4a"].contains(file.pathExtension))
+                || (["blitztext-padded-", "blitztext-live-", "blitztext-import-"].contains { name.hasPrefix($0) } && file.pathExtension == "wav")
+                || (name.hasPrefix("fluidaudio-streaming-") && file.pathExtension == "raw")
+            if leftover { try? FileManager.default.removeItem(at: file) }
+        }
     }
 
     func startRecording() {
         errorMessage = nil
         lastRecordingDuration = 0
-        recordingURL = nil
-        if let currentFileURL {
-            try? FileManager.default.removeItem(at: currentFileURL)
+        fileURL = Self.newFileURL()
+
+        // Without access macOS records silence; say why instead of "Keine Aufnahme erkannt".
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .denied, .restricted:
+            errorMessage = MicrophonePermission.deniedMessage
+            return
+        default:
+            break
         }
 
+        // 16 kHz mono, the rate the models work at: 32 KB per second, deleted after use.
         let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
             AVSampleRateKey: 16000,
             AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
         ]
 
+        MicrophoneSelection.applyForRecording()
+        MicrophoneSelection.dictationIsRecording = true
+
         do {
-            let fileURL = makeRecordingURL()
-            currentFileURL = fileURL
             audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
             audioRecorder?.delegate = self
             audioRecorder?.isMeteringEnabled = true
-            audioRecorder?.record()
+            guard audioRecorder?.record() == true else {
+                audioRecorder = nil
+                restoreInput()
+                errorMessage = "Die Aufnahme lie\u{00DF} sich nicht starten. Darf Blitztext das Mikrofon nutzen?"
+                return
+            }
             isRecording = true
+            recordingURL = nil
             startMetering()
         } catch {
-            currentFileURL = nil
+            restoreInput()
             errorMessage = "Aufnahme konnte nicht gestartet werden: \(error.localizedDescription)"
         }
     }
@@ -52,23 +92,15 @@ final class AudioRecorder: NSObject, AVAudioRecorderDelegate {
         stopMetering()
         lastRecordingDuration = audioRecorder?.currentTime ?? 0
         audioRecorder?.stop()
+        restoreInput()
         isRecording = false
-        recordingURL = currentFileURL
-        currentFileURL = nil
-        audioRecorder = nil
+        recordingURL = fileURL
         audioLevel = 0
     }
 
-    func discardRecording() {
-        if let recordingURL {
-            try? FileManager.default.removeItem(at: recordingURL)
-            self.recordingURL = nil
-        }
-
-        if let currentFileURL {
-            try? FileManager.default.removeItem(at: currentFileURL)
-            self.currentFileURL = nil
-        }
+    private func restoreInput() {
+        MicrophoneSelection.dictationIsRecording = false
+        MicrophoneSelection.restore()
     }
 
     private func startMetering() {
