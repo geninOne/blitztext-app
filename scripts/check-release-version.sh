@@ -52,16 +52,32 @@ check_schluessel() {
     fi
 }
 
-# Kein PlistBuddy und kein plutil: dieses Skript laeuft auch auf dem
-# Windows-Runner. Gelesen wird die Zeile direkt nach dem Schluesselnamen.
-mac_pubkey="$(sed -n '/<key>BLZUpdatePublicKey<\/key>/{n;p;}' BlitztextMac/Resources/Info.plist \
-    | sed -e 's/.*<string>//' -e 's/<\/string>.*//' -e 's/[[:space:]]//g')"
+# Der Mac aktualisiert sich seit dem Upstream-Sync ueber Sparkle. Info.plist
+# zieht beide Werte aus project.yml, deshalb wird dort gelesen.
+mac_pubkey="$(sed -n 's/^ *SPARKLE_PUBLIC_ED_KEY: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' BlitztextMac/project.yml | head -1)"
+mac_feed="$(sed -n 's/^ *SPARKLE_FEED_URL: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' BlitztextMac/project.yml | head -1)"
 win_pubkey="$(node -p "(require('./BlitztextWin/src-tauri/tauri.conf.json').plugins?.updater?.pubkey || '').trim()")"
 
-check_schluessel "BlitztextMac/Resources/Info.plist (BLZUpdatePublicKey)" "$mac_pubkey"
+check_schluessel "BlitztextMac/project.yml (SPARKLE_PUBLIC_ED_KEY)" "$mac_pubkey"
 check_schluessel "BlitztextWin/src-tauri/tauri.conf.json (plugins.updater.pubkey)" "$win_pubkey"
 
+# Der Feed muss auf dieses Repository zeigen. Stuende hier noch die Adresse des
+# Originalprojekts, wuerde jede Installation beim naechsten Update auf dessen
+# Version wechseln und unsere Ergaenzungen verlieren.
+case "$mac_feed" in
+    https://github.com/geninOne/blitztext-app/*)
+        ;;
+    "")
+        echo "BlitztextMac/project.yml (SPARKLE_FEED_URL) ist leer." >&2
+        status=1
+        ;;
+    *)
+        echo "BlitztextMac/project.yml (SPARKLE_FEED_URL) zeigt auf '$mac_feed' statt auf dieses Repository." >&2
+        status=1
+        ;;
+esac
+
 if [ "$status" -eq 0 ]; then
-    echo "Alle Versionsnummern stimmen mit $TAG ueberein, beide Update-Schluessel sind hinterlegt."
+    echo "Alle Versionsnummern stimmen mit $TAG ueberein, beide Update-Schluessel sind hinterlegt, der Sparkle-Feed zeigt auf dieses Repository."
 fi
 exit "$status"

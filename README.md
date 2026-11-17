@@ -10,14 +10,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cmagnussen/blitztext-app/releases/latest"><img src="https://img.shields.io/github/v/release/cmagnussen/blitztext-app?label=download&color=4F46E5" alt="Latest release"></a>
+  <a href="https://github.com/geninOne/blitztext-app/releases/latest"><img src="https://img.shields.io/github/v/release/geninOne/blitztext-app?label=download&color=4F46E5" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-111111?logo=apple" alt="macOS 14 or newer">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2563EB" alt="MIT License"></a>
-  <a href="https://github.com/cmagnussen/blitztext-app/actions/workflows/ci.yml"><img src="https://github.com/cmagnussen/blitztext-app/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/geninOne/blitztext-app/actions/workflows/ci.yml"><img src="https://github.com/geninOne/blitztext-app/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/cmagnussen/blitztext-app/releases/latest"><b>Download for macOS</b></a> ·
+  <a href="https://github.com/geninOne/blitztext-app/releases/latest"><b>Download for macOS</b></a> ·
   <a href="https://blitztext.de">blitztext.de</a> ·
   <a href="#build-it-yourself">Build it yourself</a>
 </p>
@@ -28,6 +28,19 @@
 </p>
 
 Hold a shortcut, speak, let go. Blitztext turns your speech into text and pastes it where your cursor is. Speech recognition runs on your Mac, the writing modes use Apple Intelligence on your Mac. No account, no server, no audio leaving the device.
+
+> **This is a fork.** Upstream is [cmagnussen/blitztext-app](https://github.com/cmagnussen/blitztext-app),
+> and the Mac app follows it closely. This repository adds:
+>
+> - **Windows:** a companion app built with Tauri (`BlitztextWin/`), see [BlitztextWin/README.md](BlitztextWin/README.md).
+> - **Dictation into an inbox:** one of your own modes can append its dictation to a dated
+>   Markdown file in a folder you choose, instead of pasting at the cursor. Settings: "Diktat in die Inbox".
+>   Files are named `YYYY-MM-DD-diktat.md`, and the day rolls over at 04:00 local time.
+> - **Its own releases:** macOS and Windows builds, and a Sparkle update feed served from this repository.
+> - **A gateway over http:** for the provider "Eigene Adresse", a plain-http address is allowed with an
+>   API key, so a LiteLLM gateway inside a company network works. Upstream refuses that case.
+>
+> A shared logic layer for both apps lives in [`shared/`](shared/) (prompts, gateway contract, config schema).
 
 ## Why Blitztext?
 
@@ -92,7 +105,7 @@ The app is in German for now.
 
 ## Install
 
-1. Open the [latest release](https://github.com/cmagnussen/blitztext-app/releases/latest), download the ZIP under "Assets", unpack it and move **Blitztext.app** to **Applications**.
+1. Open the [latest release](https://github.com/geninOne/blitztext-app/releases/latest), download the ZIP under "Assets", unpack it and move **Blitztext.app** to **Applications**.
 2. Open Blitztext. It lives in the menu bar.
 3. Allow **Microphone** and **Accessibility** (needed to paste into other apps).
 4. In the settings (**Modelle**), load a local speech model once. Parakeet Ultra is recommended on Apple silicon, about 630 MB.

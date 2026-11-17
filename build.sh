@@ -6,6 +6,9 @@ set -euo pipefail
 
 RUN_AFTER=false
 INSTALL_APP=false
+# Fork: nur die Architektur dieses Rechners bauen, ohne clean. Fuer die
+# Kompilierpruefung in der CI, nicht fuer Auslieferung.
+FAST_BUILD=false
 BUILD_CONFIGURATION="Release"
 UNIVERSAL_ARCHS="arm64 x86_64"
 # Signing identity for the finished app. Default "-" is ad hoc: works on this Mac, but
@@ -29,13 +32,30 @@ for arg in "$@"; do
         --release)
             BUILD_CONFIGURATION="Release"
             ;;
+        --fast)
+            FAST_BUILD=true
+            ;;
         *)
             echo "Unbekannte Option: $arg"
-            echo "Verwendung: ./build.sh [--install] [--run] [--release] [--debug]"
+            echo "Verwendung: ./build.sh [--install] [--run] [--release] [--debug] [--fast]"
             exit 1
             ;;
     esac
 done
+
+if [ "$FAST_BUILD" = true ]; then
+    BUILD_ARCHS="$(uname -m)"
+    XCODEBUILD_ACTIONS=(build)
+else
+    BUILD_ARCHS="$UNIVERSAL_ARCHS"
+    XCODEBUILD_ACTIONS=(clean build)
+fi
+
+if [ "$FAST_BUILD" = true ] && [ "$INSTALL_APP" = true ]; then
+    echo "❌ --fast und --install passen nicht zusammen."
+    echo "   Ein --fast-Build laeuft nur auf $BUILD_ARCHS und ist nicht universal."
+    exit 1
+fi
 
 verify_universal_app() {
     local app_path="$1"
@@ -59,14 +79,17 @@ verify_universal_app() {
         exit 1
     fi
 
-    if [[ " $archs " != *" arm64 "* || " $archs " != *" x86_64 "* ]]; then
-        echo "❌ Build ist nicht universal. Erwartet: arm64 + x86_64"
-        echo "   Gefunden: $archs"
-        file "$binary_path" 2>/dev/null || true
-        exit 1
-    fi
+    local expected
+    for expected in $BUILD_ARCHS; do
+        if [[ " $archs " != *" $expected "* ]]; then
+            echo "❌ Build enthaelt $expected nicht. Erwartet: $BUILD_ARCHS"
+            echo "   Gefunden: $archs"
+            file "$binary_path" 2>/dev/null || true
+            exit 1
+        fi
+    done
 
-    echo "✅ Universal Binary verifiziert: $archs"
+    echo "✅ Architekturen verifiziert: $archs"
 }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -104,8 +127,8 @@ xcodebuild \
     -configuration "$BUILD_CONFIGURATION" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
     ONLY_ACTIVE_ARCH=NO \
-    ARCHS="$UNIVERSAL_ARCHS" \
-    clean build
+    ARCHS="$BUILD_ARCHS" \
+    "${XCODEBUILD_ACTIONS[@]}"
 
 # App finden
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/$BUILD_CONFIGURATION/Blitztext.app"
@@ -168,7 +191,7 @@ echo "   $DEST"
 echo ""
 echo "Build-Typ: $BUILD_CONFIGURATION"
 echo "Signatur: $([ "$CODESIGN_IDENTITY" = "-" ] && echo "ad hoc" || echo "$CODESIGN_IDENTITY")"
-echo "Architekturen: $UNIVERSAL_ARCHS"
+echo "Architekturen: $BUILD_ARCHS"
 echo "Kompatibel: Apple Silicon + Intel (macOS 14+)"
 echo ""
 echo "Naechste Schritte:"

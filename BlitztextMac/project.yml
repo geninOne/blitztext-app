@@ -15,10 +15,17 @@ settings:
     CURRENT_PROJECT_VERSION: "52"
     # In-app updates for installs outside Jamf (Sparkle). The feed is the appcast of the
     # latest public GitHub release; the key is the public half of the signing key.
-    SPARKLE_FEED_URL: "https://github.com/cmagnussen/blitztext-app/releases/latest/download/appcast.xml"
+    # Fork: eigener Feed. Zeigte bis zum Upstream-Sync auf cmagnussen, was
+    # unsere Installationen auf die Originalversion zurueckgesetzt haette.
+    SPARKLE_FEED_URL: "https://github.com/geninOne/blitztext-app/releases/latest/download/appcast.xml"
     # Name in Finder and the Dock; a design preview builds as "Blitztext Vorschau".
     APP_DISPLAY_NAME: Blitztext
-    SPARKLE_PUBLIC_ED_KEY: "E3+VuN7OgR+preZ8H1a73gmDhNDeqvznjUxxpO8kzMM="
+    # Fork: oeffentliche Haelfte unseres eigenen Sparkle-Schluessels. Leer
+    # heisst, dass Sparkle jedes Update ablehnt: sicher, aber Updates stehen
+    # still, bis der Schluessel hier steht. Erzeugt wird er einmalig mit
+    # Sparkles generate_keys, die private Haelfte gehoert ins Repository-Secret
+    # SPARKLE_PRIVATE_KEY. scripts/check-release-version.sh prueft beides.
+    SPARKLE_PUBLIC_ED_KEY: ""
 
 packages:
   Sparkle:
