@@ -22,6 +22,8 @@
 	<string>Blitztext benötigt Mikrofon-Zugriff für die Sprach-Transkription.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Blitztext nimmt den Ton eines Online-Meetings auf, damit es auf deinem Mac mitgeschrieben werden kann. Der Ton verlässt den Mac nicht.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Blitztext schreibt dein Diktat in den Ordner, den du dafür eingestellt hast.</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>CFBundleIconFile</key>
@@ -80,5 +82,22 @@
 			</dict>
 		</dict>
 	</array>
+	<!-- Fork: Unser LiteLLM-Gateway laeuft im Firmennetz ueber http. Ohne
+	     diese Ausnahme blockiert App Transport Security die Anfrage, bevor
+	     die App ueberhaupt etwas senden kann. Aendert sich der Hostname,
+	     muss er hier mitgeaendert werden. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ai-gateway.intra.evia.de</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>

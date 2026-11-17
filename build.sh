@@ -192,14 +192,18 @@ echo ""
 echo "Build-Typ: $BUILD_CONFIGURATION"
 echo "Signatur: $([ "$CODESIGN_IDENTITY" = "-" ] && echo "ad hoc" || echo "$CODESIGN_IDENTITY")"
 echo "Architekturen: $BUILD_ARCHS"
-echo "Kompatibel: Apple Silicon + Intel (macOS 14+)"
+if [ "$FAST_BUILD" = true ]; then
+    echo "Kompatibel: nur $BUILD_ARCHS (--fast), macOS 14+"
+else
+    echo "Kompatibel: Apple Silicon + Intel (macOS 14+)"
+fi
 echo ""
 echo "Naechste Schritte:"
 echo "1. App starten"
 echo "2. Mikrofon erlauben"
 echo "3. Fuer direktes Einfuegen zusaetzlich Bedienungshilfen erlauben"
 echo "4. Lokales Sprachmodell laden, optional einen Modell-Anbieter mit API-Key eintragen"
-echo "5. Fertige, signierte Version: https://github.com/cmagnussen/blitztext-app/releases"
+echo "5. Fertige Version: https://github.com/geninOne/blitztext-app/releases"
 echo ""
 
 # Optional: direkt starten
