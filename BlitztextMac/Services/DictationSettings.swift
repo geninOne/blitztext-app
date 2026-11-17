@@ -23,21 +23,32 @@ struct DictationSettings: Codable, Equatable {
     var vaultFolderPath: String = ""
     var writesSecondBrainFrontmatter: Bool = false
     var sphere: DictationSphere = .beruf
+    /// Die `id` des eigenen Modus, dessen Diktate in die Tagesdatei gehen
+    /// statt an den Cursor. Leer heisst: kein Modus schreibt in den Vault.
+    ///
+    /// Frueher war das ein eigener Workflow-Typ im Fork. Seit das
+    /// Originalprojekt eigene Modi kennt, reicht ein Modus ohne Anweisung:
+    /// er transkribiert wortgenau und bringt Name, Symbol und Kuerzel schon
+    /// mit. So bleibt der Fork aus `WorkflowType` heraus.
+    var vaultModeID: String = ""
 
     init(
         vaultFolderPath: String = "",
         writesSecondBrainFrontmatter: Bool = false,
-        sphere: DictationSphere = .beruf
+        sphere: DictationSphere = .beruf,
+        vaultModeID: String = ""
     ) {
         self.vaultFolderPath = vaultFolderPath
         self.writesSecondBrainFrontmatter = writesSecondBrainFrontmatter
         self.sphere = sphere
+        self.vaultModeID = vaultModeID
     }
 
     enum CodingKeys: String, CodingKey {
         case vaultFolderPath
         case writesSecondBrainFrontmatter
         case sphere
+        case vaultModeID
     }
 
     /// Jedes Feld über decodeIfPresent, damit eine bestehende settings.json
@@ -50,5 +61,6 @@ struct DictationSettings: Codable, Equatable {
             forKey: .writesSecondBrainFrontmatter
         ) ?? false
         sphere = try container.decodeIfPresent(DictationSphere.self, forKey: .sphere) ?? .beruf
+        vaultModeID = try container.decodeIfPresent(String.self, forKey: .vaultModeID) ?? ""
     }
 }

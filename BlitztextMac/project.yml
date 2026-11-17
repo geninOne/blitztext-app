@@ -150,6 +150,11 @@ targets:
       - path: Services/KeychainService.swift
       - path: Services/SealedStoreFiles.swift
       - path: ../BlitztextShared/Meeting/MeetingStore.swift
+      # Fork: Vault-Inbox (Tagesdatei, Warteschlange, Einstellungen).
+      - path: Services/DictationSettings.swift
+      - path: Services/VaultInboxDocument.swift
+      - path: Services/VaultInboxService.swift
+      - path: Services/DictationQueueStore.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.blitztext.mac.tests

@@ -962,6 +962,9 @@ struct CustomizeSettingsView: View {
 
             CustomModesSection(appState: appState)
 
+            // Fork: Vault-Inbox, siehe VaultInboxSection.swift
+            VaultInboxSection(appState: appState)
+
             AppModeRulesSection(appState: appState)
             }
 

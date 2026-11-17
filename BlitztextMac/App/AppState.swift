@@ -120,6 +120,20 @@ final class AppState {
     var emojiTextSettings: EmojiTextSettings {
         didSet { saveSettings() }
     }
+    /// Fork: Ablageordner und gewaehlter Modus der Vault-Inbox.
+    var dictationSettings: DictationSettings {
+        didSet { saveSettings() }
+    }
+
+    // Diktat in den Vault (Fork). Nicht private, weil die Logik in
+    // VaultInboxWriting.swift liegt.
+    let vaultInboxService = VaultInboxService()
+    let dictationQueue = DictationQueueStore(fileURL: AppSupportPaths.dictationQueueURL)
+    var dictationQueueCount = 0
+    /// Grund, warum der letzte Nachziehversuch vorzeitig endete. nil heisst,
+    /// es gab nichts Ungewoehnliches. Wird in den Einstellungen angezeigt.
+    var dictationQueueIssue: String?
+    var notificationsDenied = false
 
     // Hotkeys
     let hotkeyService = HotkeyService()
@@ -208,6 +222,7 @@ final class AppState {
         self.textImprovementSettings = Self.loadTextImprovementSettings()
         self.dampfAblassenSettings = Self.loadDampfAblassenSettings()
         self.emojiTextSettings = Self.loadEmojiTextSettings()
+        self.dictationSettings = Self.loadDictationSettings()
         self.history = TranscriptHistoryStore(retention: loadedAppSettings.historyRetention, persistent: !Self.isToolRun)
         CustomModeCatalog.modes = loadedAppSettings.customModes
         if Self.isToolRun { return }
@@ -227,6 +242,12 @@ final class AppState {
         migrateToSetupAssistant()
         KeychainService.removeLegacyServerCredentials()
         AudioRecorder.removeLeftoverRecordings()
+        // Fork: liegengebliebene Diktate nachziehen, sobald ein Ordner steht.
+        if vaultFolderConfigured {
+            flushDictationQueue()
+        } else {
+            refreshDictationQueueCount()
+        }
         refreshUnfinishedRecordings()
         NotificationCenter.default.addObserver(forName: UnfinishedRecordings.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshUnfinishedRecordings() }
@@ -790,7 +811,8 @@ final class AppState {
             transcription: transcriptionSettings,
             textImprovement: textImprovementSettings,
             dampfAblassen: dampfAblassenSettings,
-            emojiText: emojiTextSettings
+            emojiText: emojiTextSettings,
+            dictation: dictationSettings
         )
         if let data = try? JSONEncoder().encode(container) {
             // Atomic like the history: a crash mid-write must not leave a truncated file,
@@ -826,6 +848,10 @@ final class AppState {
 
     private static func loadEmojiTextSettings() -> EmojiTextSettings {
         loadContainer()?.emojiText ?? EmojiTextSettings()
+    }
+
+    private static func loadDictationSettings() -> DictationSettings {
+        loadContainer()?.dictation ?? DictationSettings()
     }
 
     private static func loadContainer() -> SettingsContainer? {
@@ -938,6 +964,18 @@ final class AppState {
         }
         if let type = activeWorkflow?.type {
             history.add(text, workflow: type)
+        }
+        // Fork: Diktate des Vault-Modus gehen in die Tagesdatei, nicht an den
+        // Cursor. Bewusst vor allem Weiteren, damit kein Text in ein fremdes
+        // Fenster rutscht.
+        if VaultInboxRouting.writesToVault(activeWorkflow?.type, settings: dictationSettings) {
+            let finishing = activeWorkflow
+            writeToVaultInbox(text, type: finishing?.type)
+            if activeLaunchSource == .hotkeyBackground {
+                page = .main
+            }
+            scheduleWorkflowCleanup(for: finishing, after: 1.05)
+            return
         }
         var output = text
         var transcript = activeWorkflow?.transcript
@@ -1287,6 +1325,9 @@ private struct SettingsContainer: Codable {
     var textImprovement: TextImprovementSettings
     var dampfAblassen: DampfAblassenSettings?
     var emojiText: EmojiTextSettings?
+    /// Fork: Vault-Inbox. Optional, damit eine settings.json ohne diesen
+    /// Abschnitt weiter laedt.
+    var dictation: DictationSettings?
 }
 
 // MARK: - Notification for Popover Dismissal
