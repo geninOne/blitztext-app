@@ -90,7 +90,7 @@ struct MacAIProviderSection: View {
                 .foregroundStyle(.secondary)
             if AIClient.isInsecureAddress(appState.aiProvider?.baseURL ?? "") {
                 Label(
-                    "http:// zu einem anderen Rechner: Texte gehen unverschlüsselt durchs Netz. Mit API-Key lehnt Blitztext die Anfrage ab; ohne Key geht sie durch.",
+                    "http:// zu einem anderen Rechner: Texte und API-Key gehen unverschlüsselt durchs Netz. Nur für ein Gateway im eigenen Netz sinnvoll.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.ui(12))

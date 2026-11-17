@@ -83,7 +83,11 @@ enum AIClient {
         if config.provider.requiresAPIKey, key == nil {
             throw AIClientError.missingKey(config.provider)
         }
-        if key != nil, isInsecureAddress(config.baseURL) {
+        // Fork: Unser LiteLLM-Gateway laeuft im Firmennetz ueber http, und ohne
+        // Key laesst es keine Anfrage durch. Fuer "Eigene Adresse" wird deshalb
+        // nicht mehr blockiert; die Warnung in den Einstellungen bleibt stehen.
+        // Fuer die Cloud-Anbieter bleibt die Sperre, deren Adressen sind https.
+        if key != nil, isInsecureAddress(config.baseURL), config.provider != .custom {
             throw AIClientError.insecureAddress
         }
         switch config.provider.apiStyle {
