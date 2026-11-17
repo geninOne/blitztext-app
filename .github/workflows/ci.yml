@@ -90,6 +90,12 @@ jobs:
             brew install xcodegen
           fi
 
+      # Sekundensache und ohne App-Build: spielt an einem Fake-Bundle durch,
+      # dass ein fehlgeschlagenes Signieren die vorhandene Installation nicht
+      # kaputt macht.
+      - name: Install-Block von build.sh
+        run: ./scripts/test-install-block.sh
+
       # --fast baut nur fuer die Architektur des Runners und ohne clean. Ob der
       # Code auch als universal Binary durchgeht, beantwortet der Release-Build
       # auf main; hier wuerde die zweite Architektur nur die Laufzeit verdoppeln.
