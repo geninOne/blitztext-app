@@ -341,48 +341,96 @@ git commit -m "Windows: Einstellungen liegen in einer Datei statt im localStorag
 
 **Files:**
 - Create: `BlitztextWin/src-tauri/src/hotkeys.rs`
-- Modify: `BlitztextWin/src-tauri/src/lib.rs` (`set_hotkey` nimmt eine Modus-ID)
+- Modify: `BlitztextWin/src-tauri/src/lib.rs` (`HotkeyMap` dorthin verschieben, `set_hotkey`, `clear_hotkey`, Handler)
+- Modify: `BlitztextWin/src/popover.ts` (zwei Aufrufe von `set_hotkey`, Parametername)
+
+**Ausgangslage:** `lib.rs` hat bereits `struct HotkeyMap(Mutex<HashMap<Shortcut, String>>)`
+und ein `set_hotkey(workflow, accelerator)`, das die alte Belegung des Workflows
+und jede Belegung eines anderen Workflows mit demselben Kuerzel freigibt. Der
+gespeicherte Wert ist schon eine beliebige Zeichenkette, die Logik ist also
+bereits fuer Modus-IDs geeignet. Diese Task zieht sie in ein testbares Modul,
+benennt den Parameter um, ergaenzt `clear_hotkey` und behebt einen Fehler: heute
+sind die alten Kuerzel schon abgemeldet und aus der Map entfernt, bevor das neue
+registriert wird. Scheitert die Registrierung (zum Beispiel ein vom System
+belegtes Kuerzel), steht der Modus ohne Kuerzel da.
 
 **Interfaces:**
-- Consumes: Task 2 (Modus-IDs), Task 3 (Ablage).
-- Produces: `set_hotkey(mode_id: String, accelerator: String) -> Result<(), String>`;
-  `HotkeyMap` bildet `Shortcut` auf `String` (Modus-ID) ab;
-  `clear_hotkey(mode_id: String) -> Result<(), String>`.
+- Consumes: Task 2 (Modus-IDs).
+- Produces in `hotkeys.rs`, rein und ohne Tauri testbar (`Shortcut` laesst sich
+  per `Shortcut::from_str` ohne App erzeugen):
+  - `#[derive(Default)] pub struct HotkeyMap { .. }` (ohne Mutex; den legt
+    `lib.rs` als verwalteten Zustand darum)
+  - `pub fn freed_by(&self, mode_id: &str, shortcut: &Shortcut) -> Vec<Shortcut>`:
+    alle Kuerzel, die frei werden, wenn `mode_id` das Kuerzel bekommt (die
+    bisherige Belegung des Modus und eine fremde Belegung desselben Kuerzels),
+    ohne die Map zu aendern
+  - `pub fn assign(&mut self, mode_id: &str, shortcut: Shortcut)`
+  - `pub fn clear(&mut self, mode_id: &str) -> Option<Shortcut>`
+  - `pub fn mode_for(&self, shortcut: &Shortcut) -> Option<&str>`
+- Produces als Tauri-Kommandos:
+  - `set_hotkey(mode_id: String, accelerator: String) -> Result<(), String>`,
+    im Frontend `invoke("set_hotkey", { modeId, accelerator })`
+  - `clear_hotkey(mode_id: String) -> Result<(), String>`, im Frontend
+    `invoke("clear_hotkey", { modeId })`
+- Ablauf in `set_hotkey`: `freed_by` abfragen, diese Kuerzel abmelden, das neue
+  registrieren. Scheitert das, die eben abgemeldeten wieder anmelden (so gut es
+  geht), die Map unveraendert lassen und den Fehler zurueckgeben. Erst nach
+  erfolgreicher Registrierung `assign`.
+- `popover.ts` uebergibt an beiden Aufrufstellen weiterhin den Workflow-Namen
+  als `modeId`; das ist bis Task 6 gewollt, die Map speichert jede Zeichenkette.
 
 - [ ] **Schritt 1: Fehlschlagende Tests schreiben**
 
-In `hotkeys.rs`, gegen die reine Zuordnungslogik ohne Tauri:
+In `hotkeys.rs`:
 
 ```rust
 #[test]
-fn zweites_modus_mit_gleichem_kuerzel_verdraengt_das_erste() { /* Map: nach zwei set bleibt eine Zuordnung, zeigt auf den zweiten Modus */ }
+fn zweiter_modus_mit_gleichem_kuerzel_verdraengt_den_ersten() {
+    /* a bekommt X, dann b bekommt X: freed_by(b, X) == [X];
+       nach assign zeigt mode_for(X) auf b, a hat kein Kuerzel mehr */
+}
 
 #[test]
-fn geloeschter_modus_gibt_sein_kuerzel_frei() { /* nach clear ist das Kuerzel nicht mehr in der Map */ }
-```
+fn neues_kuerzel_gibt_das_alte_des_modus_frei() {
+    /* a hat X, freed_by(a, Y) == [X]; nach assign: mode_for(X) None, mode_for(Y) a */
+}
 
-Dafuer `struct HotkeyMap` mit `assign(&mut self, mode_id: &str, accel: &str) -> Option<String>`
-(gibt das freigewordene Kuerzel zurueck) und `clear(&mut self, mode_id: &str) -> Option<String>`.
+#[test]
+fn beide_belegungen_werden_frei() {
+    /* a hat X, b hat Y; freed_by(a, Y) enthaelt X und Y, genau diese zwei */
+}
+
+#[test]
+fn freed_by_aendert_nichts() { /* nach freed_by ist die Map gleich */ }
+
+#[test]
+fn geloeschter_modus_gibt_sein_kuerzel_frei() {
+    /* a hat X; clear(a) == Some(X); mode_for(X) None; zweites clear(a) == None */
+}
+```
 
 - [ ] **Schritt 2: Lauf pruefen**
 
 Run: `cd BlitztextWin/src-tauri && cargo test`
-Expected: FAIL.
+Expected: FAIL, Modul fehlt.
 
-- [ ] **Schritt 3: `HotkeyMap` umsetzen und die Kommandos darauf stellen**
+- [ ] **Schritt 3: `hotkeys.rs` umsetzen, `lib.rs` und `popover.ts` darauf stellen**
 
-`set_hotkey` meldet das von `assign` zurueckgegebene Kuerzel beim
-Global-Shortcut-Plugin ab, bevor es das neue registriert.
+`HotkeyMap` aus `lib.rs` entfernen, der verwaltete Zustand wird
+`Mutex<hotkeys::HotkeyMap>`. Der Shortcut-Handler im Builder nutzt `mode_for`.
+`clear_hotkey` meldet das von `clear` gelieferte Kuerzel ab. Die zwei Aufrufe in
+`popover.ts` auf `{ modeId: ..., accelerator }` umstellen.
 
 - [ ] **Schritt 4: Lauf pruefen**
 
-Run: `cd BlitztextWin/src-tauri && cargo test`
-Expected: PASS.
+Run: `cd BlitztextWin/src-tauri && cargo test && cargo build`, dann
+`cd BlitztextWin && npm test && npm run build`
+Expected: alles gruen, keine Warnungen.
 
 - [ ] **Schritt 5: Commit**
 
 ```bash
-git add BlitztextWin/src-tauri/src/hotkeys.rs BlitztextWin/src-tauri/src/lib.rs
+git add BlitztextWin/src-tauri/src/hotkeys.rs BlitztextWin/src-tauri/src/lib.rs BlitztextWin/src/popover.ts
 git commit -m "Windows: Tastenkuerzel haengen an Modi statt an festen Workflows"
 ```
 
