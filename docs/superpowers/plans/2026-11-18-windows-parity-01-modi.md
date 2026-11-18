@@ -42,6 +42,10 @@ Vite, Vitest, `cargo test`.
   und loest nichts mehr aus (Task 5).
 - Altdaten aus `localStorage`: genau einmal uebernommen, ein zweiter Start
   erzeugt keine doppelten Modi (Task 7).
+- Erster Start nach dem Update: Gateway-Adresse und Kuerzel sind noch da,
+  obwohl die Ablage gewechselt hat (Task 3).
+- Modellschritt schlaegt fehl oder antwortet leer: das Gesagte wird trotzdem
+  eingefuegt (Task 6).
 - Englisches Diktat: die Diktatregeln gehen auf Englisch mit, nicht auf
   Deutsch, sonst zieht das Modell die Antwort in die falsche Sprache (Task 6).
 
@@ -219,15 +223,49 @@ git commit -m "Windows: Modusmodell und Vorlagen aus shared/"
 - Modify: `BlitztextWin/src-tauri/src/lib.rs` (zwei Kommandos im `invoke_handler`)
 - Create: `BlitztextWin/src/settings-store.ts`
 - Create: `BlitztextWin/src/settings-store.test.ts`
+- Modify: `BlitztextWin/src/config.ts` (Altleser, `settingsVersion`, alte Ablage raus)
+- Modify: `BlitztextWin/src/popover.ts` (auf die Dateiablage umstellen)
 
 **Interfaces:**
-- Consumes: Task 1 (`settings.rs`).
+- Consumes: Task 1 (`settings.rs`), Task 2 (`Settings.modes`).
 - Produces:
   - Rust: `settings_load(app: AppHandle) -> Result<String, String>` gibt den
     Dateiinhalt als JSON-Text zurueck, bei fehlender oder unlesbarer Datei
     `"{}"`. `settings_save(app: AppHandle, json: String) -> Result<(), String>`
     schreibt ueber eine Nebendatei und benennt danach um.
   - TS: `loadSettings(): Promise<Settings>`, `saveSettings(s: Settings): Promise<void>`
+  - TS: `readLegacySettings(): unknown | null` in `config.ts`, liest das rohe
+    Objekt aus `localStorage` (`null`, wenn nichts da oder unlesbar).
+  - `Settings.settingsVersion: number`, Standard `1`.
+
+**Nachtrag aus der Pruefung von Task 2 (bindend):**
+
+- Bisher liest und schreibt `popover.ts` an sechs Stellen synchron ueber
+  `loadSettings`/`saveSettings` aus `config.ts`, also `localStorage`. Ohne
+  Umstellung waere die Dateiablage toter Code. Diese Task stellt `popover.ts`
+  um: einmal beim Start `await loadSettings()`, danach eine Kopie im Speicher;
+  `persist` speichert ohne zu warten und protokolliert Fehler. Die alten
+  Funktionen in `config.ts` verschwinden; uebrig bleibt nur
+  `readLegacySettings()`.
+- Kein Nutzer darf zwischen Task 3 und Task 7 seine Einstellungen verlieren.
+  Gibt `settings_load` `"{}"` zurueck (noch keine Datei), uebernimmt
+  `loadSettings` einmalig das Altobjekt aus `readLegacySettings()`, mit denselben
+  verschachtelten Zusammenfuehrungen wie das bisherige `loadSettings` in
+  `config.ts` (`liteLLM`, `hotkeys`, `improve`, `dampf` mit Rueckfall auf den
+  Standardtext, `emoji`), und speichert das Ergebnis sofort in die Datei.
+  `localStorage` wird nicht geloescht, es bleibt als Rueckweg.
+- Gespeicherte Werte vom falschen Typ duerfen die Standardwerte nicht
+  zerstoeren: ist `modes` kein Array, gilt `[]`.
+- Zusaetzliche Tests in `settings-store.test.ts`:
+
+```ts
+it("uebernimmt beim ersten Start die Einstellungen aus dem localStorage", async () => {
+  /* settings_load liefert "{}", readLegacySettings liefert { liteLLM: { baseURL: "http://gw:4000" } }:
+     Ergebnis hat diese baseURL, settings_save wurde genau einmal aufgerufen */
+});
+it("eine vorhandene Datei hat Vorrang, das Altobjekt wird nicht gelesen", async () => { /* ... */ });
+it("ein gespeichertes modes: null faellt auf die leere Liste zurueck", async () => { /* ... */ });
+```
 
 - [ ] **Schritt 1: Fehlschlagende Rust-Tests schreiben**
 
@@ -293,7 +331,7 @@ Expected: PASS.
 - [ ] **Schritt 9: Commit**
 
 ```bash
-git add BlitztextWin/src-tauri/src/settings.rs BlitztextWin/src-tauri/src/lib.rs BlitztextWin/src/settings-store.ts BlitztextWin/src/settings-store.test.ts
+git add BlitztextWin/src-tauri/src/settings.rs BlitztextWin/src-tauri/src/lib.rs BlitztextWin/src/settings-store.ts BlitztextWin/src/settings-store.test.ts BlitztextWin/src/config.ts BlitztextWin/src/popover.ts
 git commit -m "Windows: Einstellungen liegen in einer Datei statt im localStorage"
 ```
 
@@ -411,12 +449,34 @@ git commit -m "Windows: Modi anlegen, bearbeiten und loeschen"
 - Produces: Rust `detect_language(text: String) -> String`, liefert `"en"` nur,
   wenn `whatlang` sicher Englisch erkennt, sonst `"de"`.
 
+**Nachtrag aus der Pruefung von Task 2 (bindend):**
+
+- `runMode` gibt `Promise<{ text: string; aiFailed: boolean }>` zurueck statt
+  `Promise<string>`. Wirft `chat` oder kommt eine leere Antwort zurueck, ist
+  `text` das unveraenderte Transkript und `aiFailed` wahr. So verhaelt sich der
+  Mac (`AIStepFailed` in `CustomModeWorkflow.swift`): das Gesagte geht nie
+  verloren.
+- Eigene Modi laufen auf dem Mac als `generate`: sie bekommen die Diktatregeln,
+  aber keine Rahmenregel (`RewriteGuard.framingRule` gilt nur fuer die
+  eingebauten Modi). Also hier ebenfalls keine Rahmenregel.
+- Auf dem Mac haben auch der Eigennamen-Satz und der Kontextblock eine
+  englische Fassung (`ModePrompts.customTermsInstruction`, `withFieldContext`).
+  `systemPromptForMode` bekommt deshalb einen vierten Parameter
+  `language: "de" | "en" = "de"`. Die Texte beider Fassungen wandern aus
+  `modes.ts` nach `shared/prompts.json` unter `modeFrames` (Globale Vorgabe:
+  `shared/prompts.json` ist die einzige Quelle fuer Prompttexte), zeichengenau
+  aus `ModePrompts.swift`.
+- Zusaetzliche Tests: je Sprache ein Test auf die exakte Ausgabe von
+  `systemPromptForMode` mit Anweisung, Eigennamen und Kontext (legt die
+  Reihenfolge fest, `toContain` tut das nicht); `runMode` mit werfendem `chat`
+  und mit leerer Antwort liefert das Transkript und `aiFailed: true`.
+
 - [ ] **Schritt 1: Fehlschlagende Tests schreiben**
 
 ```ts
 it("ein Modus ohne Anweisung ruft chat nicht auf", async () => {
   const chat = vi.fn();
-  expect(await runMode(newMode("Diktat"), "hallo", { chat })).toBe("hallo");
+  expect((await runMode(newMode("Diktat"), "hallo", { chat, language: async () => "de" })).text).toBe("hallo");
   expect(chat).not.toHaveBeenCalled();
 });
 
@@ -471,21 +531,31 @@ git commit -m "Windows: Aufnahme laeuft ueber den gewaehlten Modus"
 
 **Interfaces:**
 - Consumes: Tasks 2, 3.
-- Produces: `migrateLegacySettings(raw: unknown): Settings | null`
-  (`null`, wenn nichts zu uebernehmen ist)
+- Produces: `migrateToModes(settings: Settings): Settings | null`
+  (`null`, wenn `settingsVersion` schon `2` oder hoeher ist)
+
+**Nachtrag aus der Pruefung von Task 2 (bindend):** Die urspruengliche
+Bedingung "Datei hat kein Feld `modes`" greift nie: seit Task 2 ist `modes`
+Teil der Standardwerte, und Task 3 schreibt die Datei beim ersten Start. Die
+Uebernahme haengt deshalb an `settingsVersion`: sie laeuft bei `< 2`, setzt
+danach `2` und speichert einmal. Die Altwerte (`improve`, `dampf`, `emoji`,
+`hotkeys`) stehen seit Task 3 bereits in der Datei, `localStorage` wird hier
+nicht mehr gelesen.
 
 - [ ] **Schritt 1: Fehlschlagende Tests schreiben**
 
 ```ts
 it("macht aus den vier Workflows vier Modi", () => {
-  const s = migrateLegacySettings(altbestand)!;
+  const s = migrateToModes(altbestand)!;
   expect(s.modes.map((m) => m.name)).toEqual(["Diktat", "Text verbessern", "Dampf ablassen", "Emojis"]);
 });
 
 it("uebernimmt die Kuerzel der alten Workflows", () => { /* Super+Shift+KeyD haengt am Diktat-Modus */ });
 
 it("laeuft nur einmal", () => {
-  expect(migrateLegacySettings({ modes: [] })).toBeNull();
+  const einmal = migrateToModes(altbestand)!;
+  expect(einmal.settingsVersion).toBe(2);
+  expect(migrateToModes(einmal)).toBeNull();
 });
 ```
 
@@ -499,7 +569,7 @@ Expected: FAIL.
 Aus `improve`, `dampf`, `emoji` werden Modi mit der jeweiligen Anweisung aus
 `shared/prompts.json`; aus `transcribe` wird ein Modus ohne Anweisung. Die
 Kuerzel werden auf die neuen IDs umgehaengt. `loadSettings` ruft die Uebernahme
-nur, wenn die Datei kein Feld `modes` hat, und schreibt danach einmal.
+bei `settingsVersion < 2` und schreibt danach einmal.
 
 - [ ] **Schritt 4: Lauf pruefen**
 
