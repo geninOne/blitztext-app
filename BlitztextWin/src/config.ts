@@ -29,11 +29,16 @@ export interface Settings {
   // Global hotkeys per workflow, as accelerator strings (e.g. "Super+Shift+KeyD").
   // "Super" is the Windows key (= Cmd on the Mac dev machine). Key names follow
   // the W3C KeyboardEvent.code values, so the in-app recorder can store them 1:1.
+  // Ein leerer Eintrag ("") heisst "bewusst kein Kuerzel". Bei den eingebauten
+  // Schluesseln darf er nie geloescht werden, sonst legt der Lader beim naechsten
+  // Start das Standardkuerzel wieder darunter.
   // Der Schluessel ist die Modus-ID; die vier alten Workflow-Namen bleiben
   // vorerst als Eintraege stehen, bis die Uebernahme sie in Modi umwandelt.
   hotkeys: Record<string, string>;
   // Eigene Modi, wie auf dem Mac frei anlegbar.
   modes: CustomMode[];
+  // Wahr, sobald die Startmodi einmal angelegt wurden; danach geloeschte bleiben weg.
+  hasSeededCustomModes: boolean;
   // Per-workflow tuning, mirroring the macOS app's "Anpassen" tab.
   improve: {
     tone: TextTone;
@@ -104,6 +109,7 @@ export const defaultSettings: Settings = {
     emoji: "Super+Shift+KeyE",
   },
   modes: [],
+  hasSeededCustomModes: false,
   improve: {
     tone: "neutral",
     systemPrompt: "",

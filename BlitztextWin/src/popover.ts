@@ -27,6 +27,7 @@ import {
 } from "./mode-editor";
 import { iconFor } from "./mode-icons";
 import { hasInstruction } from "./modes";
+import { reconcileDuplicateHotkeys, removeCustomModeOrphans, seedCustomModesIfNeeded } from "./seed";
 import { deliveryFor, resolveModeId, rewriteOrKeep, runMode, type ModeTarget, type RunResult } from "./run-mode";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -122,6 +123,11 @@ window.addEventListener("DOMContentLoaded", async () => {
       console.error("Einstellungen nicht gespeichert:", error),
     );
   };
+  // Startarbeiten vor dem ersten Zeichnen und vor dem Anmelden der Kuerzel:
+  // Startmodi einmalig anlegen, Kuerzel verschwundener Modi entfernen. Gespeichert
+  // wird am Ende des Starts einmal, falls irgendetwas davon etwas geaendert hat.
+  let startChanged = seedCustomModesIfNeeded(settings);
+  if (removeCustomModeOrphans(settings)) startChanged = true;
   const history: HistoryEntry[] = [];
 
   // --- View switching (menu <-> settings, in the same popover) ---
@@ -971,7 +977,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   renderModes();
 
   // Initial render + register all saved hotkeys: erst die vier Workflows, dann
-  // die eigenen Modi. Eintraege zu geloeschten Modi bleiben liegen, ohne Wirkung.
+  // die eigenen Modi. Verwaiste Eintraege sind oben schon entfernt.
   renderRows();
   const ids = [...WORKFLOW_ORDER, ...settings.modes.map((m) => m.id)];
   for (const id of ids) {
@@ -979,8 +985,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (!accelerator) continue;
     try {
       await invoke("set_hotkey", { modeId: id, accelerator });
+      // Doppelte Kuerzel aus alten Dateien: das zuletzt angemeldete gewinnt, wie
+      // im Kern, der die frueheren Besitzer abmeldet.
+      if (reconcileDuplicateHotkeys(settings, [[id, accelerator]])) startChanged = true;
     } catch {
       /* invalid combo surfaced when the user edits it */
     }
   }
+  if (startChanged) persist();
 });
