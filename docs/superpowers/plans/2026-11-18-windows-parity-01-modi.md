@@ -440,41 +440,96 @@ git commit -m "Windows: Tastenkuerzel haengen an Modi statt an festen Workflows"
 
 **Files:**
 - Create: `BlitztextWin/src/mode-editor.ts`
-- Modify: `BlitztextWin/src/popover.ts` (Einstellungsansicht ruft den Editor)
 - Create: `BlitztextWin/src/mode-editor.test.ts`
+- Create: `shared/mode-icons.json`
+- Create: `BlitztextWin/src/mode-icons.ts`
+- Modify: `BlitztextWin/src/popover.ts` (Abschnitt "Modi", Kuerzel-Rekorder je Modus)
+- Modify: `BlitztextWin/index.html` (Abschnitt "Modi" oben in "Anpassen")
+- Modify: `BlitztextWin/package.json` (`lucide`, exakt gepinnt)
 
 **Interfaces:**
-- Consumes: Tasks 2, 3, 4.
-- Produces: `renderModeList(container: HTMLElement, settings: Settings, on: ModeEvents): void`
+- Consumes: Task 2 (`CustomMode`, `newMode`, `modeTemplates`, `modeFromTemplate`),
+  Task 3 (`saveSettings` ueber `persist`), Task 4 (`set_hotkey`/`clear_hotkey`
+  mit `{ modeId, ... }`).
+- Produces, rein und ohne DOM testbar in `mode-editor.ts`:
+  - `addMode(settings: Settings, mode: CustomMode): void` (haengt an)
+  - `updateMode(settings: Settings, mode: CustomMode): void` (ersetzt per `id`)
+  - `removeMode(settings: Settings, id: string): { hadHotkey: boolean }`
+    (entfernt den Modus und seinen Eintrag in `settings.hotkeys`)
+- Produces, DOM, nicht unit-getestet:
+  `renderModeList(container: HTMLElement, settings: Settings, on: ModeEvents): void`
   mit `ModeEvents = { add(mode: CustomMode): void; update(mode: CustomMode): void; remove(id: string): void }`.
+- Produces in `mode-icons.ts`: `iconFor(symbol: string): SVGElement`, mit
+  Rueckfall auf das Symbol fuer `wand.and.stars` bei unbekanntem Namen.
+
+**Entscheidungen aus dem Pre-flight vor Task 5 (bindend):**
+
+- Vitest laeuft ohne DOM, und Task 1 hat festgelegt, keine DOM-Umgebung
+  nachzuruesten. Deshalb trennt diese Task Zustand und Darstellung: die drei
+  Zustandsfunktionen sind getestet, `renderModeList` wird von Hand geprueft.
+- Gespeichert bleiben die SF-Symbol-Namen des Macs (Datenvertraeglichkeit).
+  Angezeigt wird ueber Lucide, wie im Entwurf festgelegt. Die Zuordnung der
+  13 Namen aus `CustomMode.symbols` (`BlitztextShared/Modes/CustomMode.swift`)
+  zu Lucide-Symbolen liegt in `shared/mode-icons.json`, damit ein spaeteres
+  Teilprojekt sie wiederverwenden kann.
+- Farben: die drei Familien `day` ("Blau"), `evening` ("Violett", Standard),
+  `night` ("Lila") wie auf dem Mac; die Farbwerte aus
+  `BlitztextShared/Design/BlackboatTokens.swift`, als CSS-Variablen in
+  `index.html`, mit hellem und dunklem Modus wie die vorhandene Palette.
+- Der neue Abschnitt "Modi" steht oben im Tab "Anpassen". Die alten Abschnitte
+  ("Tastenkuerzel" je Workflow, "Blitztext+", "Blitztext $%&!", "Blitztext :)")
+  bleiben in dieser Task stehen, Task 7 entfernt sie nach der Uebernahme.
+  "Eigennamen" bleibt dauerhaft, er gilt fuer alle Modi.
+- Das Kuerzel je Modus nimmt der vorhandene Rekorder auf (`renderHotkey` in
+  `popover.ts`, etwa Zeile 678). Er wird so verallgemeinert, dass er eine
+  beliebige Kennung annimmt; keine zweite Aufnahmelogik daneben.
+- Loeschen: `invoke("clear_hotkey", { modeId })`, dann `removeMode`, dann
+  `persist`.
 
 - [ ] **Schritt 1: Fehlschlagende Tests schreiben**
 
 ```ts
-it("Loeschen eines Modus gibt sein Kuerzel frei", () => { /* remove -> settings.hotkeys hat die ID nicht mehr */ });
-it("Anlegen aus einer Vorlage uebernimmt Name, Symbol und Anweisung", () => { /* ... */ });
+it("Loeschen eines Modus entfernt ihn und sein Kuerzel", () => {
+  /* zwei Modi, einer mit Eintrag in settings.hotkeys; removeMode(id):
+     Modus weg, hotkeys hat die ID nicht mehr, hadHotkey === true */
+});
+it("Loeschen eines Modus ohne Kuerzel meldet hadHotkey false", () => { /* ... */ });
+it("Anlegen aus einer Vorlage uebernimmt Name, Symbol und Anweisung", () => {
+  /* addMode(settings, modeFromTemplate(modeTemplates()[0])): Name "Als E-Mail",
+     icon "envelope.fill", prompt gleich, id custom-<uuid> */
+});
+it("Bearbeiten ersetzt nur den Modus mit derselben Kennung", () => { /* ... */ });
+it("jedes Symbol aus CustomMode.symbols hat eine Zuordnung", () => {
+  /* alle 13 Namen sind Schluessel in shared/mode-icons.json */
+});
 ```
 
 - [ ] **Schritt 2: Lauf pruefen**
 
 Run: `cd BlitztextWin && npm test`
-Expected: FAIL.
+Expected: FAIL, Module fehlen.
 
-- [ ] **Schritt 3: `mode-editor.ts` umsetzen**
+- [ ] **Schritt 3: Umsetzen**
 
-Liste der Modi mit Symbol, Name, Kuerzel-Abzeichen. Knopf "Modus anlegen" mit
-Auswahl aus `modeTemplates()` oder leer. Bearbeiten aendert Name, Symbol,
-Farbe, Anweisung und Kuerzel. Loeschen ruft `clear_hotkey`.
+Zustandsfunktionen, Symbolzuordnung, Abschnitt "Modi" mit Liste (Symbol,
+Name, Kuerzel-Abzeichen), Knopf "Modus anlegen" mit Auswahl aus den Vorlagen
+oder leer, Bearbeiten von Name, Symbol, Farbe, Anweisung und Kuerzel,
+Loeschen.
 
 - [ ] **Schritt 4: Lauf pruefen**
 
-Run: `cd BlitztextWin && npm test`
-Expected: PASS.
+Run: `cd BlitztextWin && npm test && npm run build`
+Expected: PASS, keine Warnungen.
 
-- [ ] **Schritt 5: Commit**
+- [ ] **Schritt 5: Von Hand nachsehen**
+
+`npm run tauri dev`: Modus aus Vorlage anlegen, umbenennen, Symbol und Farbe
+wechseln, Kuerzel setzen, loeschen. Nach Neustart ist der Zustand erhalten.
+
+- [ ] **Schritt 6: Commit**
 
 ```bash
-git add BlitztextWin/src/mode-editor.ts BlitztextWin/src/mode-editor.test.ts BlitztextWin/src/popover.ts
+git add BlitztextWin/src/mode-editor.ts BlitztextWin/src/mode-editor.test.ts BlitztextWin/src/mode-icons.ts shared/mode-icons.json BlitztextWin/src/popover.ts BlitztextWin/index.html BlitztextWin/package.json BlitztextWin/package-lock.json
 git commit -m "Windows: Modi anlegen, bearbeiten und loeschen"
 ```
 
@@ -576,6 +631,7 @@ git commit -m "Windows: Aufnahme laeuft ueber den gewaehlten Modus"
 - Create: `BlitztextWin/src/migrate.ts`
 - Create: `BlitztextWin/src/migrate.test.ts`
 - Modify: `BlitztextWin/src/settings-store.ts` (`loadSettings` ruft die Uebernahme)
+- Modify: `BlitztextWin/src/popover.ts`, `BlitztextWin/index.html` (alte Workflow-Abschnitte entfernen)
 
 **Interfaces:**
 - Consumes: Tasks 2, 3.
@@ -624,15 +680,24 @@ bei `settingsVersion < 2` und schreibt danach einmal.
 Run: `cd BlitztextWin && npm test`
 Expected: PASS, drei Tests.
 
-- [ ] **Schritt 5: Von Hand nachsehen**
+- [ ] **Schritt 5: Alte Abschnitte entfernen**
+
+Nach der Uebernahme steuern `improve`, `dampf`, `emoji` und die Kuerzel je
+Workflow nichts mehr. Die Abschnitte "Tastenkuerzel" (je Workflow),
+"Blitztext+", "Blitztext $%&!" und "Blitztext :)" verschwinden aus
+`index.html` und `popover.ts`, ebenso ihre Aufnahme der Workflow-Kuerzel beim
+Start. "Eigennamen" bleibt. Die Felder in `Settings` bleiben vorerst stehen
+(Rueckweg), werden aber nicht mehr angezeigt.
+
+- [ ] **Schritt 6: Von Hand nachsehen**
 
 `npm run tauri dev` auf dem Mac: die vier Modi stehen im Menue, ihre Kuerzel
 loesen aus, ein neuer Modus laesst sich anlegen und loeschen.
 
-- [ ] **Schritt 6: Commit**
+- [ ] **Schritt 7: Commit**
 
 ```bash
-git add BlitztextWin/src/migrate.ts BlitztextWin/src/migrate.test.ts BlitztextWin/src/settings-store.ts
+git add BlitztextWin/src/migrate.ts BlitztextWin/src/migrate.test.ts BlitztextWin/src/settings-store.ts BlitztextWin/src/popover.ts BlitztextWin/index.html
 git commit -m "Windows: alte Workflow-Einstellungen werden zu Modi"
 ```
 
