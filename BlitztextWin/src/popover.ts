@@ -16,6 +16,15 @@ import {
 } from "./config";
 import { systemPromptFor } from "./prompts";
 import { loadSettings, saveSettings } from "./settings-store";
+import {
+  addMode,
+  assignHotkey,
+  displayName,
+  removeMode,
+  renderModeList,
+  updateMode,
+  type ModeEvents,
+} from "./mode-editor";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -48,7 +57,9 @@ function setupSegmented(
 }
 
 // Accelerator strings use W3C KeyboardEvent.code names ("Super+Shift+KeyD").
-function accelParts(accel: string): string[] {
+// Ohne Kuerzel (fehlender Eintrag) gibt es keine Abzeichen.
+function accelParts(accel: string | undefined): string[] {
+  if (!accel) return [];
   return accel.split("+").map((part) => {
     if (part === "Super") return "Win";
     if (part === "Control") return "Ctrl";
@@ -257,6 +268,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   // up stops); "toggle" = press to start, press again (or Esc/tray) to stop.
   let lastHotkeyDown = 0;
   await listen<string>("hotkey-down", (event) => {
+    // Eigene Modi nehmen hier noch nicht auf; ihr Kuerzel ist registriert,
+    // loest aber bis dahin nichts aus.
+    if (event.payload && !(WORKFLOW_ORDER as string[]).includes(event.payload)) return;
     const workflow = (event.payload as WorkflowType) || "transcribe";
     if (settings.hotkeyMode === "toggle") {
       // Ignore OS key auto-repeat so a held key doesn't flip start/stop.
@@ -270,7 +284,8 @@ window.addEventListener("DOMContentLoaded", async () => {
       void startRecording(workflow); // hold: re-entry is ignored in startRecording
     }
   });
-  await listen("hotkey-up", () => {
+  await listen<string>("hotkey-up", (event) => {
+    if (event.payload && !(WORKFLOW_ORDER as string[]).includes(event.payload)) return;
     if (settings.hotkeyMode === "hold") stopRecording();
   });
   await listen("popover-stop", () => stopRecording());
@@ -668,37 +683,124 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   renderTerms();
 
-  // Hotkeys (rebind UI + registration)
+  // Hotkeys (rebind UI + registration). Ein Rekorder fuer alle Kennungen: die
+  // vier Workflows und die eigenen Modi. Abzeichen derselben Kennung koennen an
+  // mehreren Stellen stehen (Kopfzeile und Editor eines Modus); alle bleiben
+  // gleich, und ein Kuerzel, das eine andere Kennung verliert, verschwindet
+  // auch dort.
+  type HotkeyTarget = {
+    id: string;
+    label: () => string;
+    status: HTMLElement;
+    changeBtn: HTMLButtonElement;
+  };
   const hotkeyStatus = el("hotkey-status");
   const hotkeyList = el("hotkey-list");
-  const displays = {} as Record<WorkflowType, HTMLElement>;
-  const changeButtons = {} as Record<WorkflowType, HTMLButtonElement>;
-  let capturingWorkflow: WorkflowType | null = null;
+  const displays = new Map<string, HTMLElement[]>();
+  let capturing: HotkeyTarget | null = null;
 
-  function renderHotkey(workflow: WorkflowType): void {
-    displays[workflow].innerHTML = accelParts(settings.hotkeys[workflow])
+  function labelFor(id: string): string {
+    if ((WORKFLOW_ORDER as string[]).includes(id)) return workflowLabels[id as WorkflowType];
+    const mode = settings.modes.find((m) => m.id === id);
+    return mode ? displayName(mode) : id;
+  }
+
+  function hotkeyDisplay(id: string): HTMLElement {
+    const display = document.createElement("div");
+    display.className = "badges";
+    // Hier noch nicht aufraeumen: das neue Abzeichen und seine Geschwister
+    // haengen beim Aufbau noch nicht im Dokument.
+    displays.set(id, [...(displays.get(id) ?? []), display]);
+    fillBadges(display, id);
+    return display;
+  }
+
+  function fillBadges(display: HTMLElement, id: string): void {
+    display.innerHTML = accelParts(settings.hotkeys[id])
       .map((key) => `<span class="key">${key}</span>`)
       .join("");
   }
 
-  async function applyHotkey(workflow: WorkflowType, accel: string): Promise<void> {
+  // Abzeichen frueherer Neuzeichnungen haengen nicht mehr im Dokument und fallen weg.
+  function pruneDisplays(): void {
+    for (const [id, list] of displays) displays.set(id, list.filter((d) => d.isConnected));
+  }
+
+  function renderHotkey(id: string): void {
+    pruneDisplays();
+    for (const display of displays.get(id) ?? []) fillBadges(display, id);
+  }
+
+  function flash(status: HTMLElement, message: string): void {
+    status.textContent = message;
+    setTimeout(() => {
+      if (status.textContent === message) status.textContent = "";
+    }, 2000);
+  }
+
+  async function applyHotkey(target: Omit<HotkeyTarget, "changeBtn">, accel: string): Promise<void> {
     try {
-      await invoke("set_hotkey", { modeId: workflow, accelerator: accel });
-      settings.hotkeys[workflow] = accel;
-      persist();
-      renderHotkey(workflow);
-      renderRows(); // keep the menu badges in sync
-      hotkeyStatus.textContent = `${workflowLabels[workflow]}: gespeichert`;
-      setTimeout(() => (hotkeyStatus.textContent = ""), 2000);
+      await invoke("set_hotkey", { modeId: target.id, accelerator: accel });
     } catch (error) {
-      hotkeyStatus.textContent = `Fehler: ${error}`;
+      // set_hotkey laesst die alte Belegung stehen, also auch hier nichts aendern.
+      target.status.textContent = `Fehler: ${error}`;
+      return;
     }
+    const lost = assignHotkey(settings, target.id, accel);
+    persist();
+    renderHotkey(target.id);
+    lost.forEach(renderHotkey);
+    renderRows(); // keep the menu badges in sync
+    const taken = lost.length ? ` (vorher bei ${lost.map(labelFor).join(", ")})` : "";
+    flash(target.status, `${target.label()}: gespeichert${taken}`);
+  }
+
+  async function clearHotkey(target: Omit<HotkeyTarget, "changeBtn">): Promise<void> {
+    try {
+      await invoke("clear_hotkey", { modeId: target.id });
+    } catch (error) {
+      target.status.textContent = `Fehler: ${error}`;
+      return;
+    }
+    delete settings.hotkeys[target.id];
+    persist();
+    renderHotkey(target.id);
+    renderRows();
+    flash(target.status, `${target.label()}: Kürzel entfernt`);
   }
 
   function endCapture(message: string): void {
-    if (capturingWorkflow) changeButtons[capturingWorkflow].textContent = "✎";
-    capturingWorkflow = null;
-    hotkeyStatus.textContent = message;
+    if (capturing) {
+      capturing.changeBtn.textContent = "✎";
+      capturing.status.textContent = message;
+    }
+    capturing = null;
+  }
+
+  // Knopf, der fuer eine Kennung die naechste Tastenkombination aufnimmt.
+  function recordButton(id: string, label: () => string, status: HTMLElement): HTMLButtonElement {
+    const changeBtn = document.createElement("button");
+    changeBtn.type = "button";
+    changeBtn.className = "hk-btn";
+    changeBtn.textContent = "✎";
+    changeBtn.title = "Ändern";
+    changeBtn.addEventListener("click", () => {
+      if (capturing) endCapture("");
+      capturing = { id, label, status, changeBtn };
+      changeBtn.textContent = "…";
+      status.textContent = `${label()}: Kombination drücken (Esc bricht ab).`;
+    });
+    return changeBtn;
+  }
+
+  function smallButton(text: string, title: string, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "hk-btn";
+    button.textContent = text;
+    button.title = title;
+    button.addEventListener("click", onClick);
+    return button;
   }
 
   for (const workflow of WORKFLOW_ORDER) {
@@ -713,39 +815,23 @@ window.addEventListener("DOMContentLoaded", async () => {
     label.className = "wf-label";
     label.textContent = workflowLabels[workflow];
 
-    const display = document.createElement("div");
-    display.className = "badges";
-    displays[workflow] = display;
-
-    const changeBtn = document.createElement("button");
-    changeBtn.type = "button";
-    changeBtn.className = "hk-btn";
-    changeBtn.textContent = "✎";
-    changeBtn.title = "Ändern";
-    changeButtons[workflow] = changeBtn;
-    changeBtn.addEventListener("click", () => {
-      if (capturingWorkflow) endCapture("");
-      capturingWorkflow = workflow;
-      changeBtn.textContent = "…";
-      hotkeyStatus.textContent = `${workflowLabels[workflow]}: Kombination drücken (Esc bricht ab).`;
-    });
-
-    const resetBtn = document.createElement("button");
-    resetBtn.type = "button";
-    resetBtn.className = "hk-btn";
-    resetBtn.textContent = "↺";
-    resetBtn.title = "Zurücksetzen";
-    resetBtn.addEventListener("click", () =>
-      void applyHotkey(workflow, defaultSettings.hotkeys[workflow]),
+    const target = { id: workflow, label: () => workflowLabels[workflow], status: hotkeyStatus };
+    const resetBtn = smallButton("↺", "Zurücksetzen", () =>
+      void applyHotkey(target, defaultSettings.hotkeys[workflow]),
     );
 
-    row.append(glyph, label, display, changeBtn, resetBtn);
+    row.append(
+      glyph,
+      label,
+      hotkeyDisplay(workflow),
+      recordButton(workflow, target.label, hotkeyStatus),
+      resetBtn,
+    );
     hotkeyList.append(row);
-    renderHotkey(workflow);
   }
 
   window.addEventListener("keydown", (event) => {
-    if (!capturingWorkflow) return;
+    if (!capturing) return;
     event.preventDefault();
     if (event.code === "Escape") {
       endCapture("Abgebrochen");
@@ -753,16 +839,65 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
     const accel = accelFromEvent(event);
     if (!accel) return;
-    const workflow = capturingWorkflow;
+    const target = capturing;
     endCapture("");
-    void applyHotkey(workflow, accel);
+    void applyHotkey(target, accel);
   });
 
-  // Initial render + register all saved hotkeys.
+  // --- Eigene Modi ---
+  const modeList = el("mode-list");
+  const modeEvents: ModeEvents = {
+    add(mode) {
+      addMode(settings, mode);
+      persist();
+      renderModes();
+    },
+    update(mode) {
+      updateMode(settings, mode);
+      persist();
+    },
+    async remove(id) {
+      if (capturing?.id === id) endCapture("");
+      try {
+        await invoke("clear_hotkey", { modeId: id });
+      } catch (error) {
+        console.error("Kürzel nicht freigegeben:", error);
+      }
+      removeMode(settings, id);
+      persist();
+      renderModes();
+    },
+    hotkeyDisplay,
+    hotkeyEditor(id) {
+      const wrap = document.createElement("div");
+      wrap.className = "hotkey-row";
+      const status = document.createElement("span");
+      status.className = "field-status mode-hk-status";
+      const label = () => labelFor(id);
+      wrap.append(
+        hotkeyDisplay(id),
+        recordButton(id, label, status),
+        smallButton("✕", "Kürzel entfernen", () => void clearHotkey({ id, label, status })),
+        status,
+      );
+      return wrap;
+    },
+  };
+  function renderModes(): void {
+    renderModeList(modeList, settings, modeEvents);
+    pruneDisplays();
+  }
+  renderModes();
+
+  // Initial render + register all saved hotkeys: erst die vier Workflows, dann
+  // die eigenen Modi. Eintraege zu geloeschten Modi bleiben liegen, ohne Wirkung.
   renderRows();
-  for (const workflow of WORKFLOW_ORDER) {
+  const ids = [...WORKFLOW_ORDER, ...settings.modes.map((m) => m.id)];
+  for (const id of ids) {
+    const accelerator = settings.hotkeys[id];
+    if (!accelerator) continue;
     try {
-      await invoke("set_hotkey", { modeId: workflow, accelerator: settings.hotkeys[workflow] });
+      await invoke("set_hotkey", { modeId: id, accelerator });
     } catch {
       /* invalid combo surfaced when the user edits it */
     }

@@ -21,6 +21,10 @@
         --key-border: rgba(255, 255, 255, 0.18);
         --accent: #4aa3ff;
         --ok: #36d07a;
+        /* Farben der eigenen Modi, BlackboatTokens.swift (Source, dunkel) */
+        --mode-day: #70a5ff;
+        --mode-evening: #a592dd;
+        --mode-night: #bb84df;
       }
       @media (prefers-color-scheme: light) {
         :root {
@@ -38,6 +42,10 @@
           --key-border: rgba(0, 0, 0, 0.12);
           --accent: #0a84ff;
           --ok: #2bbf63;
+          /* Farben der eigenen Modi, BlackboatTokens.swift (Source, hell) */
+          --mode-day: #3e41f4;
+          --mode-evening: #593ab6;
+          --mode-night: #8337a8;
         }
       }
       * { box-sizing: border-box; }
@@ -146,6 +154,35 @@
       .hk-btn { width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center; border: 1px solid var(--border); background: var(--field); color: var(--text-2); border-radius: 7px; cursor: pointer; font: inherit; font-size: 13px; }
       .hk-btn:hover { background: var(--field-hover); color: var(--text); }
 
+      /* Eigene Modi */
+      .mode-item { margin: 0 -8px 4px; padding: 0 8px; border: 1px solid transparent; border-radius: 10px; }
+      .mode-item.open { padding: 0 8px 10px; border-color: var(--border); }
+      .mode-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 0; border: none; background: transparent; color: var(--text); cursor: pointer; font: inherit; text-align: left; }
+      .mode-glyph { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; display: grid; place-items: center; color: var(--tint); background: color-mix(in srgb, var(--tint) 16%, transparent); }
+      .mode-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+      .mode-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .mode-sub { font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .mode-chevron { color: var(--text-3); font-size: 11px; width: 12px; text-align: center; }
+      .mode-editor .sub-label:first-child { margin-top: 6px; }
+      .mode-symbols { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+      .mode-symbol { height: 30px; display: grid; place-items: center; border: 1.2px solid transparent; border-radius: 8px; background: var(--field); color: var(--text-2); cursor: pointer; }
+      .mode-symbol:hover { background: var(--field-hover); }
+      .mode-symbol.active { color: var(--tint); border-color: var(--tint); background: color-mix(in srgb, var(--tint) 16%, transparent); }
+      .mode-colors { display: flex; align-items: center; gap: 10px; }
+      .mode-color { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid transparent; background: var(--tint); background-clip: content-box; padding: 3px; cursor: pointer; }
+      .mode-color.active { border-color: var(--tint); }
+      .mode-color-label { font-size: 11.5px; color: var(--text-2); }
+      .mode-editor .hint { margin-top: 6px; }
+      .mode-editor .hotkey-row { margin: 0; flex-wrap: wrap; }
+      .hotkey-row .badges:empty::before { content: "Kein Kürzel"; font-size: 11.5px; color: var(--text-3); }
+      .mode-delete { margin-top: 14px; border: none; background: transparent; color: #ff5d5d; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 0; }
+      .mode-delete:hover { text-decoration: underline; }
+      .mode-actions { margin-top: 8px; }
+      .mode-picker { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--field); }
+      .mode-picker button { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: none; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; font: inherit; font-size: 12.5px; text-align: left; }
+      .mode-picker button:hover { background: var(--field-hover); }
+      .mode-picker svg { color: var(--text-2); }
+
       .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
       .chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; font-size: 12px; background: var(--field); border: 1px solid var(--border); }
       .chip button { border: none; background: transparent; color: var(--text-3); cursor: pointer; font: inherit; padding: 0; }
@@ -218,6 +255,15 @@
 
           <!-- Tab: Anpassen -->
           <div id="tab-customize" class="tab-panel">
+            <div class="section">
+              <div class="section-label">Eigene Modi</div>
+              <p class="hint">
+                Deine eigenen Modi mit einer Anweisung für das KI-Modell, etwa
+                eine E-Mail oder Stichpunkte.
+              </p>
+              <div id="mode-list"></div>
+            </div>
+
             <div class="section">
               <div class="section-label">Tastenkürzel</div>
               <p class="hint">

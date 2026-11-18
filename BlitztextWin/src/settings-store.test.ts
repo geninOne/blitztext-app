@@ -67,6 +67,15 @@ describe("Einstellungen aus der Datei", () => {
     expect(s.emoji).toEqual(defaultSettings.emoji);
   });
 
+  it("ein abgegebenes Kuerzel bleibt nach dem Neustart leer", async () => {
+    // Hat ein eigener Modus einem Workflow die Kombination genommen, steht beim
+    // Workflow ein leerer Eintrag; der Standard darf ihn nicht zurueckholen.
+    mockLoad("ok", JSON.stringify({ hotkeys: { improve: "", "custom-1": "Super+Shift+KeyI" } }));
+    const s = await loadSettings();
+    expect(s.hotkeys.improve).toBe("");
+    expect(s.hotkeys["custom-1"]).toBe("Super+Shift+KeyI");
+  });
+
   it("ein leerer Dampf-Prompt faellt auf den Standardtext zurueck", async () => {
     mockLoad("ok", '{"dampf":{"systemPrompt":"   "}}');
     const s = await loadSettings();
