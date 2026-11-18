@@ -574,6 +574,20 @@ nichts aus. Die Handler fuer `hotkey-down` und `hotkey-up` in `popover.ts`
 ignorieren seit Task 5 jede Kennung ausser den vier eingebauten; diese Sperre
 ersetzt Task 6.
 
+**Ergaenzung nach der Pruefung von Task 5 (bindend):**
+
+- Auch der Weg der eingebauten Modi behaelt das Gesagte, wenn `chat_complete`
+  wirft oder leer antwortet: eingefuegt wird dann das Transkript, der Status
+  sagt, dass der Modellschritt gescheitert ist. Heute geht das Diktat in dem
+  Fall verloren. Die Prompts der eingebauten Modi bleiben unveraendert.
+- Modell fuer eigene Modi: `liteLLM.fastModel` (Rueckfall auf den Standard),
+  wie bei Blitztext+ und Blitztext :).
+- Der Sitzungsverlauf (`history`) nimmt auch Laeufe eigener Modi auf; als
+  Bezeichnung der Modusname, bei leerem Namen "Ohne Namen".
+- Transkription: der Aufruf von `transcribe` schickt weiter `language: "de"`
+  mit. Die Sprache je Diktat gehoert zu Teilprojekt 4. `detect_language`
+  arbeitet auf dem Transkript und waehlt nur die Sprache der Anweisungen.
+
 **Interfaces:**
 - Consumes: Tasks 2, 3. Aus Task 2 auch `spokenTranscriptRules` in
   `shared/prompts.json` (deutsch und englisch).
@@ -679,6 +693,15 @@ Task, was der Mac beim Start tut (`AppState.seedCustomModesIfNeeded` und
   eingebauten Schluesseln darf er nicht geloescht werden, sonst legt der Lader
   beim naechsten Start das Standardkuerzel wieder darunter.
 - `settingsVersion` bleibt bei `1`, es wird nicht mehr gebraucht.
+- Doppelte Kuerzel aus alten Einstellungsdateien: vor Task 5 konnte dieselbe
+  Kombination unter zwei Workflow-Schluesseln stehen. Beim Start nach jeder
+  erfolgreichen Registrierung `assignHotkey(settings, id, accelerator)`
+  aufrufen (aus Task 5) und bei Verlusten einmal speichern, damit die
+  gespeicherten Kuerzel der Regel "das zuletzt registrierte gewinnt" folgen.
+  Test: zwei Workflows mit gleichem Kuerzel, nach dem Start hat nur der
+  zuletzt registrierte es, der andere `""`.
+- In `config.ts` am Feld `hotkeys` dokumentieren, dass `""` "bewusst kein
+  Kuerzel" heisst.
 
 **Interfaces:**
 - Consumes: Task 2 (`modeTemplates`, `modeFromTemplate`), Task 3 (Ablage).

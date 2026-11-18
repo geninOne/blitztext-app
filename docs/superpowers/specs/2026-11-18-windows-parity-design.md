@@ -99,7 +99,9 @@ beide Plattformen in denselben Vault schreiben koennen.
 
 Umfang: `whisper-rs` im Rust-Kern, Modellverwaltung (Auswahl, Download,
 Fortschritt, Pruefsumme, Loeschen), Sprache je Diktat, Rueckfall auf das
-Gateway, Halluzinationsfilter wie auf dem Mac. Grosse Stufe, erstmals eigene
+Gateway, Halluzinationsfilter wie auf dem Mac. Auch der Gateway-Weg braucht die
+Sprache je Diktat: heute schickt die Windows-App fest `language: "de"` mit,
+englische Diktate werden dadurch ins Deutsche gezwungen. Grosse Stufe, erstmals eigene
 Modelldateien und Hardwareerkennung.
 
 ### TP5: Lokales Sprachmodell
