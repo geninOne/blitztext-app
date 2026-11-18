@@ -72,6 +72,14 @@ export async function runMode(
   return rewriteOrKeep(transcript, () => deps.chat(system, transcript));
 }
 
+// Wie das Ergebnis ausgeliefert wird. Gescheiterter Modellschritt: nur in die
+// Zwischenablage, nie ins Feld, damit etwa der rohe Wortlaut von Blitztext $%&!
+// dort nicht landet (keepTranscript auf dem Mac). Ohne Text gibt es nichts.
+export function deliveryFor(result: { text: string; aiFailed: boolean }): "paste" | "copy" | "none" {
+  if (result.text.length === 0) return "none";
+  return result.aiFailed ? "copy" : "paste";
+}
+
 // Was eine Kennung aus Menue oder Kuerzel ausloest.
 export type ModeTarget = { kind: "builtIn"; workflow: WorkflowType } | { kind: "custom"; mode: CustomMode };
 

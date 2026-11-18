@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import promptData from "../../shared/prompts.json";
 import { newMode, systemPromptForMode } from "./modes";
-import { resolveModeId, rewriteOrKeep, runMode } from "./run-mode";
+import { deliveryFor, resolveModeId, rewriteOrKeep, runMode } from "./run-mode";
 
 const deutsch = async () => "de" as const;
 const englisch = async () => "en" as const;
@@ -132,5 +132,20 @@ describe("resolveModeId", () => {
     expect(resolveModeId(mail.id, [])).toBeNull();
     expect(resolveModeId("custom-gibt-es-nicht", [mail])).toBeNull();
     expect(resolveModeId("toString", [mail])).toBeNull();
+  });
+});
+
+describe("deliveryFor", () => {
+  it("fuegt ein, wenn der Modellschritt gelungen ist", () => {
+    expect(deliveryFor({ text: "fertig", aiFailed: false })).toBe("paste");
+  });
+
+  it("kopiert nur, wenn der Modellschritt gescheitert ist", () => {
+    expect(deliveryFor({ text: "was gesagt wurde", aiFailed: true })).toBe("copy");
+  });
+
+  it("ein leerer Text liefert nichts aus", () => {
+    expect(deliveryFor({ text: "", aiFailed: false })).toBe("none");
+    expect(deliveryFor({ text: "", aiFailed: true })).toBe("none");
   });
 });

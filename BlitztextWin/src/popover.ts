@@ -27,7 +27,7 @@ import {
 } from "./mode-editor";
 import { iconFor } from "./mode-icons";
 import { hasInstruction } from "./modes";
-import { resolveModeId, rewriteOrKeep, runMode, type ModeTarget, type RunResult } from "./run-mode";
+import { deliveryFor, resolveModeId, rewriteOrKeep, runMode, type ModeTarget, type RunResult } from "./run-mode";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -311,13 +311,13 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
       if (!el("tab-history").hidden) renderHistory();
 
-      if (result) await invoke("paste_text", { text: result });
-      // Gescheiterter Modellschritt: das Gesagte ist trotzdem eingefuegt.
-      setStatus(
-        outcome.aiFailed
-          ? `Modellschritt fehlgeschlagen, wortgenauer Text eingefügt. ${outcome.reason ?? ""}`.trim()
-          : "Bereit",
-      );
+      // Gescheiterter Modellschritt: das Gesagte liegt in der Zwischenablage
+      // und im Verlauf, aber nicht im Feld.
+      const delivery = deliveryFor(outcome);
+      if (delivery === "paste") await invoke("paste_text", { text: result });
+      if (delivery === "copy") await invoke("copy_text", { text: result });
+      setStatus(outcome.aiFailed ? "Modellschritt gescheitert, der Text liegt in der Zwischenablage" : "Bereit");
+      if (outcome.aiFailed) console.error("Modellschritt gescheitert:", outcome.reason);
     } catch (error) {
       setStatus(`Fehler: ${error}`);
     } finally {
@@ -361,8 +361,9 @@ window.addEventListener("DOMContentLoaded", async () => {
       void startRecording(target); // hold: re-entry is ignored in startRecording
     }
   });
-  await listen<string>("hotkey-up", (event) => {
-    if (!resolveModeId(event.payload ?? "", settings.modes)) return;
+  // Loslassen beendet eine laufende Aufnahme immer, auch wenn der Modus
+  // inzwischen geloescht ist; stopRecording tut ohne Aufnahme nichts.
+  await listen<string>("hotkey-up", () => {
     if (settings.hotkeyMode === "hold") stopRecording();
   });
   await listen("popover-stop", () => stopRecording());

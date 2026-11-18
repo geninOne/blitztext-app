@@ -192,8 +192,8 @@ async fn chat_complete(
     Ok(content.trim().to_string())
 }
 
-/// Sprache der Anweisungen fuer eigene Modi: "en" nur bei sicher erkanntem
-/// Englisch, sonst "de" (siehe language.rs).
+/// Sprache der Anweisungen fuer eigene Modi: "en", wenn Englisch erkannt
+/// wird, sonst "de" (siehe language.rs).
 #[tauri::command]
 fn detect_language(text: String) -> String {
     language::detect(&text).to_string()
@@ -417,6 +417,16 @@ fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
 /// whatever app currently has focus (our window stays hidden in the tray).
 /// macOS needs Accessibility permission for the synthetic keystroke; Windows
 /// needs no prompt.
+/// Legt Text nur in die Zwischenablage, ohne Tastendruck. Fuer einen
+/// gescheiterten Modellschritt: das Gesagte bleibt erhalten, landet aber nicht
+/// im Feld (wie keepTranscript auf dem Mac).
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut cb| cb.set_text(text))
+        .map_err(|e| format!("Zwischenablage: {e}"))
+}
+
 #[tauri::command]
 fn paste_text(text: String) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
@@ -604,6 +614,7 @@ pub fn run() {
             set_hotkey,
             clear_hotkey,
             paste_text,
+            copy_text,
             record_start,
             record_stop,
             set_autostart,
