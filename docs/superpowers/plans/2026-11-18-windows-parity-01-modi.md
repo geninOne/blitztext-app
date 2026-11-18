@@ -768,3 +768,68 @@ git commit -m "Windows: Startmodi wie auf dem Mac, verwaiste Kuerzel weg"
   eingebauten Modi und die zwei Startmodi sind da, ein eigener Modus laesst
   sich anlegen und per Tastenkuerzel ausloesen.
 - `BlitztextWin/HANDOFF.md` nennt den neuen Stand und zeigt auf diesen Plan.
+
+---
+
+## Nachtrag nach der Ausfuehrung (2026-11-18)
+
+Alle sieben Tasks sind umgesetzt und einzeln geprueft, danach eine
+Abschlusspruefung ueber den ganzen Branch und eine gesammelte Korrekturrunde.
+Endstand: `npm test` 92/92, `cargo test` 24/24, beide Builds ohne Warnungen.
+Nicht geprueft: die echte Tauri-App und echtes Windows. Dafuer die Listen
+unten.
+
+### Von Hand auf dem Mac (`npm run tauri dev`)
+
+- Eigenen Modus aus Vorlage anlegen, umbenennen, Symbol und Farbe wechseln,
+  Kuerzel setzen, App neu starten: alles erhalten.
+- Kuerzel eines eingebauten Modus an einen eigenen vergeben: Abzeichen beim
+  eingebauten leer, nach Neustart loest nur der eigene aus.
+- Waehrend der Rekorder lauscht, in Name oder Anweisung einen Grossbuchstaben
+  tippen: der Buchstabe landet im Feld, kein Kuerzel wird belegt.
+- Gateway-Adresse falsch eintragen, Blitztext $%&! diktieren: nichts wird
+  eingefuegt, der Text liegt in der Zwischenablage, der Status sagt es.
+- Kurzes englisches Diktat in einem eigenen Modus: Antwort bleibt englisch.
+- Frische Einstellungsdatei: vier eingebaute Modi plus "Als E-Mail" und
+  "Stichpunkte". Einen Startmodus loeschen, neu starten: er bleibt weg.
+- Eigenen Modus loeschen, waehrend sein Kuerzel gehalten wird: nach dem
+  Loslassen endet die Aufnahme (kommt das Loslassen nach `clear_hotkey` an?).
+
+### Auf echtem Windows
+
+- `settings.json` sperren (in einem zweiten Prozess exklusiv oeffnen), App
+  starten, einen Wert aendern, neu starten: Datei unveraendert, Warnung
+  sichtbar.
+- Erster Start nach dem Update mit Altbestand im localStorage: Gateway-Adresse
+  und Kuerzel sind da.
+- `settings.json` mit Notepad und BOM speichern: wird normal gelesen.
+- `settings.json` unbrauchbar machen: `settings.json.defekt` liegt daneben,
+  Gateway-Adresse kommt aus dem Altbestand zurueck.
+- Einem Modus ein vom System belegtes Kuerzel geben (z. B. Win+L): Fehler
+  erscheint, das vorige Kuerzel des Modus loest weiterhin aus.
+- Push-to-talk mit Bluetooth-Headset, Kuerzel nur kurz antippen: keine
+  Aufnahme bleibt offen, beim naechsten Druck wird nichts Altes eingefuegt.
+- WebView2: Farben der eigenen Modi, "Kein Kuerzel" auf leeren Abzeichen,
+  Lucide-Symbole hell und dunkel.
+- CI: Job `build-windows` gruen, besonders `cargo test` (Risiko laut
+  Abschlusspruefung: Testprogramm ohne App-Manifest,
+  `STATUS_ENTRYPOINT_NOT_FOUND`).
+
+### Bewusst offen gelassen
+
+- Ein vor dieser Stufe gespeichertes Kuerzel nur mit Shift wird beim Start
+  weiter angemeldet; die neue Regel greift nur beim Aufnehmen.
+- Ein Tray-Klick, waehrend das Mikrofon noch startet, oeffnet das Menue statt
+  zu stoppen (Bestand).
+- Loslassen genau zwischen Start und `set_recording(true)`: Tray-Zustand kurz
+  falsch, kein Datenverlust (Bestand).
+- Umbenennen von `.neu` kann unter Windows an einem Virenscanner scheitern;
+  die naechste Speicherung holt es nach. Kurzer Wiederholversuch waere billig.
+- `settings.json.defekt` hat einen festen Namen; ein zweiter Defekt ersetzt
+  die erste Sicherung.
+- Fehlergrund eines gescheiterten Modellschritts nur in der Konsole (TP2,
+  Verlauf); Statusmeldungen stehen im versteckten Popover (TP7, Pille).
+- `popover.ts` ist gross; der Rekorder waere ein eigenes Modul (TP2).
+- Keine Sperre gegen eine zweite laufende Instanz (Bestand).
+- Prompts der eingebauten Modi auf dem Stand von 1.6 (eigener Nachlaufplan,
+  siehe Entwurf).
