@@ -35,4 +35,19 @@ mod tests {
         assert_eq!(normalize_base("http://host:4000///"), "http://host:4000");
         assert_eq!(normalize_base("http://host:4000/v1//"), "http://host:4000");
     }
+
+    #[test]
+    fn entfernt_auch_ui() {
+        assert_eq!(normalize_base("http://host:4000/ui/"), "http://host:4000");
+    }
+
+    #[test]
+    fn ignoriert_gross_und_kleinschreibung() {
+        assert_eq!(normalize_base("http://host:4000/V1"), "http://host:4000");
+    }
+
+    #[test]
+    fn entfernt_mehrere_segmente_hintereinander() {
+        assert_eq!(normalize_base("http://host:4000/v1/ui"), "http://host:4000");
+    }
 }
