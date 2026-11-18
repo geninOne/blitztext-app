@@ -42,6 +42,8 @@ Vite, Vitest, `cargo test`.
   und loest nichts mehr aus (Task 5).
 - Altdaten aus `localStorage`: genau einmal uebernommen, ein zweiter Start
   erzeugt keine doppelten Modi (Task 7).
+- Englisches Diktat: die Diktatregeln gehen auf Englisch mit, nicht auf
+  Deutsch, sonst zieht das Modell die Antwort in die falsche Sprache (Task 6).
 
 ---
 
@@ -396,13 +398,18 @@ git commit -m "Windows: Modi anlegen, bearbeiten und loeschen"
 
 **Files:**
 - Modify: `BlitztextWin/src/popover.ts` (Menueansicht, Aufnahmeablauf)
+- Modify: `BlitztextWin/src-tauri/src/lib.rs` (Kommando `detect_language`)
+- Modify: `BlitztextWin/src-tauri/Cargo.toml` (`whatlang`)
 - Create: `BlitztextWin/src/run-mode.ts`
 - Create: `BlitztextWin/src/run-mode.test.ts`
 
 **Interfaces:**
-- Consumes: Tasks 2, 3.
+- Consumes: Tasks 2, 3. Aus Task 2 auch `spokenTranscriptRules` in
+  `shared/prompts.json` (deutsch und englisch).
 - Produces: `runMode(mode: CustomMode, transcript: string, deps: RunDeps): Promise<string>`
-  mit `RunDeps = { chat(system: string, user: string): Promise<string> }`.
+  mit `RunDeps = { chat(system: string, user: string): Promise<string>; language(text: string): Promise<"de" | "en"> }`.
+- Produces: Rust `detect_language(text: String) -> String`, liefert `"en"` nur,
+  wenn `whatlang` sicher Englisch erkennt, sonst `"de"`.
 
 - [ ] **Schritt 1: Fehlschlagende Tests schreiben**
 
@@ -414,7 +421,22 @@ it("ein Modus ohne Anweisung ruft chat nicht auf", async () => {
 });
 
 it("ein Modus mit Anweisung schickt den zusammengesetzten Systemprompt", async () => { /* ... */ });
+
+it("haengt die Diktatregeln an, in der Sprache des Transkripts", async () => {
+  const chat = vi.fn().mockResolvedValue("ok");
+  await runMode(newMode("Mail", "envelope.fill", "Schreib eine Mail."), "on Thursday", {
+    chat,
+    language: async () => "en",
+  });
+  expect(chat.mock.calls[0][0]).toContain("The user sends you a spoken transcript.");
+});
 ```
+
+Begruendung fuer die Regeln: auf dem Mac haengt `TextRewriter.rewrite` sie an
+jeden Schritt an (`dictationRules` ist standardmaessig wahr, nur der
+Meeting-Zusammenfasser schaltet sie ab). Ohne sie loest die App
+Selbstkorrekturen nicht auf und laesst Vorbemerkungen durch. Die Sprachwahl
+folgt `PromptLanguage.of`: Englisch nur bei sicherer Erkennung, sonst Deutsch.
 
 - [ ] **Schritt 2: Lauf pruefen**
 
