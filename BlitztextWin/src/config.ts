@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import promptData from "../../shared/prompts.json";
+import type { CustomMode } from "./modes";
 
 export type ApiProvider = "openAI" | "liteLLM";
 
@@ -9,6 +10,8 @@ export type EmojiDensity = "wenig" | "mittel" | "viel";
 export type HotkeyMode = "hold" | "toggle";
 
 export interface Settings {
+  // Stand des Einstellungsformats; spaetere Uebernahmen erhoehen ihn.
+  settingsVersion: number;
   apiProvider: ApiProvider;
   // Launch the app on login (Windows: registry Run key / macOS: LaunchAgent).
   autostart: boolean;
@@ -26,7 +29,17 @@ export interface Settings {
   // Global hotkeys per workflow, as accelerator strings (e.g. "Super+Shift+KeyD").
   // "Super" is the Windows key (= Cmd on the Mac dev machine). Key names follow
   // the W3C KeyboardEvent.code values, so the in-app recorder can store them 1:1.
-  hotkeys: Record<WorkflowType, string>;
+  // Ein leerer Eintrag ("") heisst "bewusst kein Kuerzel". Bei den eingebauten
+  // Schluesseln darf er nie geloescht werden, sonst legt der Lader beim naechsten
+  // Start das Standardkuerzel wieder darunter.
+  // Der Schluessel ist die Modus-Kennung: einer der vier eingebauten Namen
+  // (transcribe, improve, dampf, emoji) oder "custom-..." eines eigenen Modus.
+  // Die eingebauten Modi bleiben eingebaut und behalten ihre Eintraege.
+  hotkeys: Record<string, string>;
+  // Eigene Modi, wie auf dem Mac frei anlegbar.
+  modes: CustomMode[];
+  // Wahr, sobald die Startmodi einmal angelegt wurden; danach geloeschte bleiben weg.
+  hasSeededCustomModes: boolean;
   // Per-workflow tuning, mirroring the macOS app's "Anpassen" tab.
   improve: {
     tone: TextTone;
@@ -40,6 +53,20 @@ export interface Settings {
   emoji: {
     density: EmojiDensity;
   };
+}
+
+// Gleiche Regel wie `normalize_base` in src-tauri/src/settings.rs: aus einer
+// eingegebenen Gateway-Adresse die nackte Basis machen. Entfernt abschliessende
+// Schraegstriche sowie abschliessende "/v1"- und "/ui"-Segmente in beliebiger
+// Reihenfolge, ohne auf Gross- und Kleinschreibung zu achten.
+export function normalizeBaseUrl(raw: string): string {
+  let value = raw.trim().replace(/\/+$/, "");
+  for (;;) {
+    const lower = value.toLowerCase();
+    if (!lower.endsWith("/v1") && !lower.endsWith("/ui")) break;
+    value = value.slice(0, -3).replace(/\/+$/, "");
+  }
+  return value;
 }
 
 // The four dictation workflows, mirroring the macOS app.
@@ -64,6 +91,7 @@ const SETTINGS_KEY = "blitztext.settings";
 export const LITELLM_KEY_ACCOUNT = "liteLLMApiKey";
 
 export const defaultSettings: Settings = {
+  settingsVersion: 1,
   apiProvider: "liteLLM",
   autostart: false,
   hotkeyMode: "hold",
@@ -81,6 +109,8 @@ export const defaultSettings: Settings = {
     dampf: "Super+Shift+KeyA",
     emoji: "Super+Shift+KeyE",
   },
+  modes: [],
+  hasSeededCustomModes: false,
   improve: {
     tone: "neutral",
     systemPrompt: "",
@@ -96,33 +126,16 @@ export const defaultSettings: Settings = {
   },
 };
 
-export function loadSettings(): Settings {
+// Liest die frueheren Einstellungen roh aus dem localStorage, nur fuer die
+// einmalige Uebernahme in die Datei (siehe settings-store.ts). Der Eintrag
+// bleibt stehen, als Rueckweg. null, wenn nichts da oder unlesbar.
+export function readLegacySettings(): unknown | null {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return structuredClone(defaultSettings);
-    const parsed = JSON.parse(raw);
-    return {
-      ...structuredClone(defaultSettings),
-      ...parsed,
-      liteLLM: { ...defaultSettings.liteLLM, ...(parsed.liteLLM ?? {}) },
-      hotkeys: { ...defaultSettings.hotkeys, ...(parsed.hotkeys ?? {}) },
-      improve: { ...defaultSettings.improve, ...(parsed.improve ?? {}) },
-      // An empty stored dampf prompt falls back to the default text, so the
-      // pre-filled instruction is always visible (and editable).
-      dampf: {
-        systemPrompt: parsed.dampf?.systemPrompt?.trim()
-          ? parsed.dampf.systemPrompt
-          : defaultSettings.dampf.systemPrompt,
-      },
-      emoji: { ...defaultSettings.emoji, ...(parsed.emoji ?? {}) },
-    };
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    return structuredClone(defaultSettings);
+    return null;
   }
-}
-
-export function saveSettings(settings: Settings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
 // Secret helpers backed by the Rust keyring commands.

@@ -3,6 +3,56 @@
 Status snapshot for continuing the Windows app in a fresh session. Read this
 first, then `shared/gateway-contract.md` and `shared/prompts.json`.
 
+## Stand nach TP1 (Windows-Paritaet, Stufe 1: eigene Modi)
+
+Der Weg zum Funktionsstand des Macs ist in Teilprojekte geteilt. Entwurf:
+`docs/superpowers/specs/2026-11-18-windows-parity-design.md`, Plan fuer TP1:
+`docs/superpowers/plans/2026-11-18-windows-parity-01-modi.md`. Branch:
+`windows/parity-1.18`. Was TP1 geaendert hat und was die aelteren Abschnitte
+weiter unten deshalb nicht mehr richtig beschreiben:
+
+- **Einstellungen als Datei statt localStorage.** `settings.json` im
+  Konfigurationsordner der App (`app_config_dir`), gelesen und geschrieben vom
+  Rust-Kern (`settings_load` / `settings_save`, `src-tauri/src/settings.rs`,
+  atomar ueber `settings.json.neu`). Die Oberflaeche haelt ein einziges
+  `settings`-Objekt in `popover.ts` und speichert ueber `persist()`.
+  Lesezustaende: `missing` (erster Start: einmalige Uebernahme aus dem alten
+  localStorage-Eintrag `blitztext.settings`, der als Rueckweg stehen bleibt),
+  `ok`, `corrupt` (Kern sichert die Datei als `settings.json.defekt`, danach
+  ebenfalls Uebernahme der Altwerte), `unreadable` (Speichern fuer die Sitzung
+  gesperrt, sichtbarer Hinweis in Menue und Einstellungen). Ein fuehrendes
+  UTF-8-BOM gilt nicht als Defekt. Ungueltige Eintraege in `modes` fallen beim
+  Laden weg. Der API-Schluessel bleibt im Schluesselbund, nie in der Datei.
+- **Eingebaute plus eigene Modi.** Die vier eingebauten Modi (Blitztext,
+  Blitztext+, Blitztext $%&!, Blitztext :)) bleiben eingebaut; darunter stehen
+  frei anlegbare eigene Modi (`settings.modes`, Kennung `custom-<uuid>`, Name,
+  Symbol, Anweisung, Farbe), bearbeitet im Abschnitt "Eigene Modi"
+  (`src/mode-editor.ts`). Vorlagen und Prompt-Rahmen kommen aus
+  `shared/prompts.json`, Symbole ueber `shared/mode-icons.json`. Ein eigener
+  Modus ohne Anweisung bleibt wortgenau. Scheitert der Modellschritt, landet
+  das Transkript nur in der Zwischenablage, nicht im Feld (`deliveryFor`).
+- **Kuerzel je Modus-Kennung.** `settings.hotkeys` ist nach Kennung
+  geschluesselt (eingebauter Name oder `custom-...`). `""` heisst "bewusst kein
+  Kuerzel" und bleibt nach dem Neustart leer; ein fehlender Eintrag eines
+  eingebauten Modus bekommt dagegen wieder sein Standardkuerzel. Der Rust-Kern
+  haelt eine `HotkeyMap` (Kuerzel zu Kennung, `src-tauri/src/hotkeys.rs`);
+  `set_hotkey(modeId, accelerator)` / `clear_hotkey(modeId)`. Eine Kombination
+  gehoert immer nur einer Kennung. Der Rekorder nimmt nur Kombinationen mit
+  Win, Strg oder Alt an (nur Umschalt waere ein Grossbuchstabe) und wertet
+  Tippen in Feldern nie als Kuerzel.
+- **Startmodi und Aufraeumen beim Start** (`src/seed.ts`): einmalig die
+  Startmodi "Als E-Mail" und "Stichpunkte" anlegen (`hasSeededCustomModes`),
+  Kuerzel verschwundener eigener Modi entfernen, dann alle Kuerzel anmelden;
+  bei doppelten Kuerzeln gewinnt der zuletzt angemeldete.
+- **Aufnahmeablauf** (`src/recording-state.ts`): ein Stopp, waehrend
+  `record_start` noch laeuft (kurzes Antippen im Haltemodus), wird gemerkt;
+  die Aufnahme wird danach sofort beendet und verworfen.
+- **Tests.** Vitest ohne DOM (`npm test` in `BlitztextWin`) fuer die reinen
+  Module (`modes`, `run-mode`, `mode-editor`, `seed`, `settings-store`,
+  `accelerator`, `recording-state`); Rust-Tests mit `cargo test` in
+  `BlitztextWin/src-tauri` (Einstellungsdatei, Kuerzel-Map, Spracherkennung).
+  Neue Logik gehoert in reine Module, damit sie ohne Tauri testbar ist.
+
 ## Goal & key decisions
 
 - evia wants Blitztext (the macOS Swift dictation app) also on **Windows**.
@@ -25,7 +75,8 @@ first, then `shared/gateway-contract.md` and `shared/prompts.json`.
 - macOS app at repo root: `BlitztextMac/`, `build.sh` — untouched by Windows work.
 - Windows app: `BlitztextWin/` (Tauri v2 vanilla-ts).
 - `shared/`: single source for prompts, gateway contract, config schema.
-- **Active branch: `windows/tauri-mvp`** (pushed to origin).
+- Fruehere Arbeitsbranch: `windows/tauri-mvp`. TP1 liegt auf
+  `windows/parity-1.18`.
 - macOS CI/release already merged to `main` (`.github/workflows/macos-release.yml`):
   PRs build a downloadable artifact; push to `main` publishes a `v0.1.<run>`
   prerelease; a `v*` tag publishes an official release.
@@ -57,9 +108,10 @@ Rust (`src-tauri/src/lib.rs`), all registered in `invoke_handler`:
   `reqwest` (rustls-tls, json, multipart), `base64`.
 - `src-tauri/Info.plist`: `NSMicrophoneUsageDescription` (mic permission for mac dev).
 
-Frontend (`src/main.ts`, `src/config.ts`, `index.html`):
+Frontend (urspruenglich `src/main.ts`, heute `src/popover.ts` plus reine Module, `src/config.ts`, `index.html`):
 - Settings form: provider (liteLLM/openAI), gateway URL, three model fields.
-  Non-secret settings in `localStorage`; API key only via keyring.
+  Nicht geheime Einstellungen liegen seit TP1 in `settings.json` (siehe oben),
+  nicht mehr im localStorage; API key only via keyring.
 - "Verbindung testen" button → `gateway_test`.
 - "Diktat testen": `MediaRecorder` → base64 → `transcribe`, with audio playback
   and byte-size diagnostics.
@@ -117,8 +169,9 @@ M1 (online-only):
 6. ✅ Tray + push-to-talk global hotkey — `Win+Shift+D` (default) hold-to-talk
    wired to the transcribe workflow; tray menu (show / quit). Rust emits
    `hotkey-down` / `hotkey-up`; webview start/stops the recorder.
-   - **Configurable hotkeys:** `HotkeyMap` state (Shortcut → workflow id) +
-     `set_hotkey(workflow, accelerator)` command rebinds at runtime (frees the
+   - **Configurable hotkeys:** `HotkeyMap` state (Shortcut → mode id, seit TP1
+     auch eigene Modi) + `set_hotkey(modeId, accelerator)` command rebinds at
+     runtime (frees the
      old/colliding combo first). Frontend has a key-capture recorder (Settings →
      Tastenkürzel) storing accelerators as W3C `KeyboardEvent.code` strings
      (e.g. "Super+Shift+KeyD") in `settings.hotkeys`; it re-registers on load.
@@ -137,7 +190,8 @@ M1 (online-only):
    - `chat_complete(base_url, model, system, user)` Rust command (POST
      `/v1/chat/completions`, temperature omitted, reads
      `choices[0].message.content`).
-   - Four workflows (transcribe / improve / dampf / emoji), each with its own
+   - Four built-in workflows (transcribe / improve / dampf / emoji; seit TP1
+     zusaetzlich eigene Modi, siehe oben), each with its own
      configurable hotkey (defaults `Win+Shift+{D,I,A,E}`). The `hotkey-down`
      event carries the workflow id; the webview tags the recording with it and,
      on stop, runs the matching chat step (model: dampf → strongModel, else
@@ -175,7 +229,8 @@ M1 (online-only):
   feature) so the transparent rounded popover works on the mac dev machine.
   Single Vite page (no multi-page input).
 - The window holds **two views** toggled in JS: `#view-menu` (status, Online
-  Whisper card, four workflow rows with hotkey badges, Beenden) and
+  Whisper card, die vier eingebauten Modi und darunter die eigenen, jeweils mit
+  Kuerzel-Abzeichen, Beenden) and
   `#view-settings` (the ‹ Zurück header + two-tab Anpassen/Zugang UI). The gear
   shows settings, ‹ Zurück returns to the menu — same window, like the macOS app.
 - Tray: left-click toggles the popover (or stops an active recording via
