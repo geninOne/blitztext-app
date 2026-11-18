@@ -19,17 +19,49 @@ pub fn normalize_base(base: &str) -> String {
     value
 }
 
-/// Liest die Einstellungsdatei als JSON-Text. Fehlt die Datei, ist sie
-/// unlesbar oder kein gueltiges JSON-Objekt, kommt "{}" zurueck: die Oberflaeche
-/// legt dann die Standardwerte darueber, statt mit leerem Zustand zu starten.
-pub fn read_settings_file(path: &Path) -> String {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return "{}".to_string();
+/// Ergebnis beim Lesen der Einstellungsdatei. Nur `Missing` darf zur
+/// Uebernahme aus dem localStorage fuehren; bei `Unreadable` darf die
+/// Oberflaeche in dieser Sitzung nicht speichern, damit eine nur kurz gesperrte
+/// Datei (Virenscanner, OneDrive) nicht ueberschrieben wird.
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum SettingsRead {
+    /// Keine Datei vorhanden (erster Start).
+    Missing,
+    /// Gueltiges JSON-Objekt, als Text.
+    Ok { json: String },
+    /// Lesbar, aber kein gueltiges JSON-Objekt; liegt gesichert als
+    /// "<path>.defekt" daneben.
+    Corrupt,
+    /// Vorhanden, aber nicht lesbar (jeder andere I/O-Fehler).
+    Unreadable,
+}
+
+/// Liest die Einstellungsdatei und unterscheidet fehlend, gueltig, kaputt und
+/// unlesbar. Eine kaputte Datei wird vorher nach "<path>.defekt" kopiert (eine
+/// fruehere Sicherung wird ersetzt). Scheitert diese Sicherung, gilt die Datei
+/// als unlesbar, damit sie nicht ungesichert ueberschrieben wird.
+pub fn read_settings_file(path: &Path) -> SettingsRead {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SettingsRead::Missing,
+        Err(_) => return SettingsRead::Unreadable,
     };
-    match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(serde_json::Value::Object(_)) => text,
-        _ => "{}".to_string(),
+    if let Ok(text) = String::from_utf8(bytes) {
+        if let Ok(serde_json::Value::Object(_)) = serde_json::from_str::<serde_json::Value>(&text) {
+            return SettingsRead::Ok { json: text };
+        }
     }
+    match std::fs::copy(path, nebendatei(path, ".defekt")) {
+        Ok(_) => SettingsRead::Corrupt,
+        Err(_) => SettingsRead::Unreadable,
+    }
+}
+
+fn nebendatei(path: &Path, endung: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(endung);
+    PathBuf::from(name)
 }
 
 /// Schreibt die Einstellungsdatei ueber eine Nebendatei "<path>.neu" und
@@ -39,9 +71,7 @@ pub fn write_settings_file(path: &Path, json: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut neu = path.as_os_str().to_owned();
-    neu.push(".neu");
-    let neu = PathBuf::from(neu);
+    let neu = nebendatei(path, ".neu");
     {
         let mut datei = std::fs::File::create(&neu)?;
         datei.write_all(json.as_bytes())?;
@@ -52,7 +82,7 @@ pub fn write_settings_file(path: &Path, json: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_base, read_settings_file, write_settings_file};
+    use super::{normalize_base, read_settings_file, write_settings_file, SettingsRead};
     use std::path::PathBuf;
 
     // Eigenes Verzeichnis je Test unter dem System-Temp, damit parallele Tests
@@ -66,18 +96,65 @@ mod tests {
     }
 
     #[test]
-    fn beschaedigte_datei_liefert_leeres_objekt() {
+    fn beschaedigte_datei_wird_gesichert_und_als_kaputt_gemeldet() {
         let dir = testverzeichnis("kaputt");
         let path = dir.join("settings.json");
+        let sicherung = dir.join("settings.json.defekt");
+        std::fs::write(&sicherung, "alte Sicherung").unwrap();
         std::fs::write(&path, "{ kaputt").unwrap();
-        assert_eq!(read_settings_file(&path), "{}");
+        assert_eq!(read_settings_file(&path), SettingsRead::Corrupt);
+        assert_eq!(std::fs::read_to_string(&sicherung).unwrap(), "{ kaputt");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn fehlende_datei_liefert_leeres_objekt() {
+    fn json_ohne_objekt_gilt_als_kaputt() {
+        let dir = testverzeichnis("keinobjekt");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "[1, 2]").unwrap();
+        assert_eq!(read_settings_file(&path), SettingsRead::Corrupt);
+        assert!(dir.join("settings.json.defekt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gesperrte_datei_ist_unlesbar_und_bleibt_unveraendert() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = testverzeichnis("gesperrt");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"hotkeyMode":"toggle"}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Als root greifen die Rechte nicht; dann laesst sich der Fall hier
+        // nicht nachstellen.
+        if std::fs::read(&path).is_ok() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let ergebnis = read_settings_file(&path);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(ergebnis, SettingsRead::Unreadable);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"hotkeyMode":"toggle"}"#);
+        assert!(!dir.join("settings.json.defekt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_wird_fuer_die_oberflaeche_serialisiert() {
+        assert_eq!(
+            serde_json::to_string(&SettingsRead::Ok { json: "{}".into() }).unwrap(),
+            r#"{"status":"ok","json":"{}"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&SettingsRead::Unreadable).unwrap(),
+            r#"{"status":"unreadable"}"#
+        );
+    }
+
+    #[test]
+    fn fehlende_datei_wird_als_fehlend_gemeldet() {
         let dir = testverzeichnis("fehlt");
-        assert_eq!(read_settings_file(&dir.join("settings.json")), "{}");
+        assert_eq!(read_settings_file(&dir.join("settings.json")), SettingsRead::Missing);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -86,7 +163,10 @@ mod tests {
         let dir = testverzeichnis("gueltig");
         let path = dir.join("settings.json");
         std::fs::write(&path, r#"{"hotkeyMode":"toggle"}"#).unwrap();
-        assert_eq!(read_settings_file(&path), r#"{"hotkeyMode":"toggle"}"#);
+        assert_eq!(
+            read_settings_file(&path),
+            SettingsRead::Ok { json: r#"{"hotkeyMode":"toggle"}"#.to_string() }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

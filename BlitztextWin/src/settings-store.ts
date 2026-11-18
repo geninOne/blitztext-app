@@ -68,25 +68,54 @@ function zusammenfuehren(gespeichert: unknown): Settings {
   };
 }
 
+// Antwort von settings_load, siehe SettingsRead in src-tauri/src/settings.rs.
+type DateiStatus = {
+  status: "missing" | "ok" | "corrupt" | "unreadable";
+  json?: string;
+};
+
+// Gesperrt, wenn die Datei beim Start vorhanden, aber nicht lesbar war (etwa
+// kurz von Virenscanner oder OneDrive gesperrt). Dann bleibt sie bis zum
+// Neustart unangetastet, statt mit Standardwerten ueberschrieben zu werden.
+let speichernGesperrt = false;
+
+export function resetSettingsStoreForTests(): void {
+  speichernGesperrt = false;
+}
+
 export async function loadSettings(): Promise<Settings> {
-  let text: string;
+  speichernGesperrt = false;
+  let datei: DateiStatus;
   try {
-    text = await invoke<string>("settings_load");
+    datei = await invoke<DateiStatus>("settings_load");
   } catch (error) {
     // Ohne Zugriff auf die Datei nichts ueberschreiben: mit den Altwerten
-    // weiterarbeiten, gespeichert wird erst bei der naechsten Aenderung.
+    // weiterarbeiten und in dieser Sitzung nicht speichern.
     console.error("Einstellungen konnten nicht gelesen werden:", error);
+    speichernGesperrt = true;
     return zusammenfuehren(readLegacySettings());
   }
 
-  let gespeichert: unknown;
-  try {
-    gespeichert = JSON.parse(text);
-  } catch {
-    gespeichert = {};
-  }
-  if (istObjekt(gespeichert) && Object.keys(gespeichert).length > 0) {
-    return zusammenfuehren(gespeichert);
+  switch (datei.status) {
+    case "ok": {
+      let gespeichert: unknown = {};
+      try {
+        gespeichert = JSON.parse(datei.json ?? "{}");
+      } catch {
+        // Der Kern liefert nur gueltige Objekte; zur Sicherheit Standardwerte.
+      }
+      return zusammenfuehren(gespeichert);
+    }
+    case "corrupt":
+      // Der Kern hat die kaputte Datei als settings.json.defekt gesichert.
+      console.error("Einstellungsdatei war beschaedigt, sie liegt als settings.json.defekt daneben.");
+      return zusammenfuehren({});
+    case "missing":
+      break;
+    default:
+      console.error("Einstellungsdatei nicht lesbar, Speichern bis zum Neustart gesperrt.");
+      speichernGesperrt = true;
+      return zusammenfuehren({});
   }
 
   // Noch keine Datei: einmalig die Einstellungen aus dem localStorage
@@ -105,5 +134,8 @@ export async function loadSettings(): Promise<Settings> {
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
+  if (speichernGesperrt) {
+    throw new Error("Einstellungsdatei war beim Start nicht lesbar, Speichern bis zum Neustart gesperrt.");
+  }
   await invoke("settings_save", { json: JSON.stringify(settings) });
 }

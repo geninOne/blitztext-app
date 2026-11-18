@@ -8,7 +8,7 @@ vi.mock("./config", async (orig) => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { defaultSettings, readLegacySettings } from "./config";
-import { loadSettings, saveSettings } from "./settings-store";
+import { loadSettings, resetSettingsStoreForTests, saveSettings } from "./settings-store";
 
 const invokeMock = vi.mocked(invoke);
 const legacyMock = vi.mocked(readLegacySettings);
@@ -17,6 +17,10 @@ const legacyMock = vi.mocked(readLegacySettings);
 let antworten: Record<string, unknown>;
 function mockInvoke(command: string, result: unknown): void {
   antworten[command] = result;
+}
+// Antwort von settings_load: Status und bei "ok" der Dateiinhalt.
+function mockLoad(status: "missing" | "ok" | "corrupt" | "unreadable", json?: string): void {
+  mockInvoke("settings_load", json === undefined ? { status } : { status, json });
 }
 function saveAufrufe(): string[] {
   return invokeMock.mock.calls
@@ -34,11 +38,12 @@ beforeEach(() => {
   });
   legacyMock.mockReset();
   legacyMock.mockReturnValue(null);
+  resetSettingsStoreForTests();
 });
 
 describe("Einstellungen aus der Datei", () => {
   it("ergaenzt fehlende Felder mit den Standardwerten", async () => {
-    mockInvoke("settings_load", '{"hotkeyMode":"toggle"}');
+    mockLoad("ok", '{"hotkeyMode":"toggle"}');
     const s = await loadSettings();
     expect(s.hotkeyMode).toBe("toggle");
     expect(s.liteLLM.baseURL).toBe("");
@@ -46,8 +51,8 @@ describe("Einstellungen aus der Datei", () => {
   });
 
   it("fuehrt verschachtelte Felder mit den Standardwerten zusammen", async () => {
-    mockInvoke(
-      "settings_load",
+    mockLoad(
+      "ok",
       JSON.stringify({
         liteLLM: { baseURL: "http://gw:4000" },
         hotkeys: { transcribe: "Ctrl+KeyT" },
@@ -63,14 +68,14 @@ describe("Einstellungen aus der Datei", () => {
   });
 
   it("ein leerer Dampf-Prompt faellt auf den Standardtext zurueck", async () => {
-    mockInvoke("settings_load", '{"dampf":{"systemPrompt":"   "}}');
+    mockLoad("ok", '{"dampf":{"systemPrompt":"   "}}');
     const s = await loadSettings();
     expect(s.dampf.systemPrompt).toBe(defaultSettings.dampf.systemPrompt);
     expect(s.dampf.systemPrompt.trim()).not.toBe("");
   });
 
   it("veraendert die Standardwerte nicht", async () => {
-    mockInvoke("settings_load", "{}");
+    mockLoad("missing");
     const s = await loadSettings();
     s.liteLLM.baseURL = "http://anders";
     s.improve.customTerms.push("n8n");
@@ -79,7 +84,7 @@ describe("Einstellungen aus der Datei", () => {
   });
 
   it("uebernimmt beim ersten Start die Einstellungen aus dem localStorage", async () => {
-    mockInvoke("settings_load", "{}");
+    mockLoad("missing");
     legacyMock.mockReturnValue({ liteLLM: { baseURL: "http://gw:4000" } });
     const s = await loadSettings();
     expect(s.liteLLM.baseURL).toBe("http://gw:4000");
@@ -90,7 +95,7 @@ describe("Einstellungen aus der Datei", () => {
   });
 
   it("eine vorhandene Datei hat Vorrang, das Altobjekt wird nicht gelesen", async () => {
-    mockInvoke("settings_load", '{"liteLLM":{"baseURL":"http://datei:4000"}}');
+    mockLoad("ok", '{"liteLLM":{"baseURL":"http://datei:4000"}}');
     legacyMock.mockReturnValue({ liteLLM: { baseURL: "http://alt:4000" } });
     const s = await loadSettings();
     expect(s.liteLLM.baseURL).toBe("http://datei:4000");
@@ -99,15 +104,15 @@ describe("Einstellungen aus der Datei", () => {
   });
 
   it("ein gespeichertes modes: null faellt auf die leere Liste zurueck", async () => {
-    mockInvoke("settings_load", '{"modes":null,"hotkeyMode":"toggle"}');
+    mockLoad("ok", '{"modes":null,"hotkeyMode":"toggle"}');
     const s = await loadSettings();
     expect(s.modes).toEqual([]);
     expect(s.hotkeyMode).toBe("toggle");
   });
 
   it("Werte vom falschen Typ zerstoeren die uebrigen Einstellungen nicht", async () => {
-    mockInvoke(
-      "settings_load",
+    mockLoad(
+      "ok",
       JSON.stringify({
         liteLLM: "kaputt",
         hotkeys: { transcribe: 5, improve: "Ctrl+KeyI" },
@@ -129,14 +134,14 @@ describe("Einstellungen aus der Datei", () => {
   });
 
   it("ohne Datei und ohne Altobjekt gibt es die Standardwerte und keinen Schreibvorgang", async () => {
-    mockInvoke("settings_load", "{}");
+    mockLoad("missing");
     const s = await loadSettings();
     expect(s).toEqual(defaultSettings);
     expect(saveAufrufe()).toHaveLength(0);
   });
 
   it("scheitert das Speichern der Uebernahme, bleiben die Altwerte trotzdem erhalten", async () => {
-    mockInvoke("settings_load", "{}");
+    mockLoad("missing");
     mockInvoke("settings_save", new Error("Platte voll"));
     legacyMock.mockReturnValue({ hotkeyMode: "toggle" });
     const fehler = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -152,8 +157,47 @@ describe("Einstellungen aus der Datei", () => {
     const fehler = vi.spyOn(console, "error").mockImplementation(() => {});
     const s = await loadSettings();
     expect(s.hotkeyMode).toBe("toggle");
+    s.hotkeyMode = "hold";
+    await expect(saveSettings(s)).rejects.toThrow();
     expect(saveAufrufe()).toHaveLength(0);
     fehler.mockRestore();
+  });
+
+  it("eine unlesbare Datei sperrt das Speichern fuer die Sitzung", async () => {
+    mockLoad("unreadable");
+    legacyMock.mockReturnValue({ liteLLM: { baseURL: "http://alt:4000" } });
+    const fehler = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = await loadSettings();
+    expect(s).toEqual(defaultSettings);
+    expect(legacyMock).not.toHaveBeenCalled();
+    s.hotkeyMode = "toggle";
+    await expect(saveSettings(s)).rejects.toThrow(/nicht lesbar/);
+    await expect(saveSettings(s)).rejects.toThrow(/nicht lesbar/);
+    expect(saveAufrufe()).toHaveLength(0);
+    fehler.mockRestore();
+  });
+
+  it("eine kaputte Datei fuehrt zu Standardwerten ohne Uebernahme, Speichern bleibt erlaubt", async () => {
+    mockLoad("corrupt");
+    legacyMock.mockReturnValue({ liteLLM: { baseURL: "http://alt:4000" } });
+    const fehler = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = await loadSettings();
+    fehler.mockRestore();
+    expect(s).toEqual(defaultSettings);
+    expect(legacyMock).not.toHaveBeenCalled();
+    expect(saveAufrufe()).toHaveLength(0);
+    s.hotkeyMode = "toggle";
+    await saveSettings(s);
+    expect(saveAufrufe()).toHaveLength(1);
+    expect(JSON.parse(saveAufrufe()[0]).hotkeyMode).toBe("toggle");
+  });
+
+  it("eine vorhandene leere Datei loest keine Uebernahme aus", async () => {
+    mockLoad("ok", "{}");
+    legacyMock.mockReturnValue({ liteLLM: { baseURL: "http://alt:4000" } });
+    const s = await loadSettings();
+    expect(s).toEqual(defaultSettings);
+    expect(legacyMock).not.toHaveBeenCalled();
   });
 
   it("saveSettings schickt das ganze Objekt als JSON an den Kern", async () => {

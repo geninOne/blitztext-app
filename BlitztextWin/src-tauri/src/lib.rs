@@ -10,11 +10,11 @@ fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir.join(SETTINGS_FILE))
 }
 
-/// Liefert die gespeicherten Einstellungen als JSON-Text, "{}" wenn noch keine
-/// (gueltige) Datei existiert. Der API-Schluessel liegt nie hier, sondern im
-/// Schluesselbund (`secret_set`).
+/// Liest die gespeicherten Einstellungen samt Status (fehlend, ok, kaputt,
+/// unlesbar), siehe `settings::SettingsRead`. Der API-Schluessel liegt nie hier,
+/// sondern im Schluesselbund (`secret_set`).
 #[tauri::command]
-fn settings_load(app: tauri::AppHandle) -> Result<String, String> {
+fn settings_load(app: tauri::AppHandle) -> Result<settings::SettingsRead, String> {
     Ok(settings::read_settings_file(&settings_path(&app)?))
 }
 
