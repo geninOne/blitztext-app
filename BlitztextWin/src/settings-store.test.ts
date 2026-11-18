@@ -8,7 +8,7 @@ vi.mock("./config", async (orig) => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { defaultSettings, readLegacySettings } from "./config";
-import { loadSettings, resetSettingsStoreForTests, saveSettings } from "./settings-store";
+import { loadSettings, resetSettingsStoreForTests, saveSettings, settingsSaveBlocked } from "./settings-store";
 
 const invokeMock = vi.mocked(invoke);
 const legacyMock = vi.mocked(readLegacySettings);
@@ -183,22 +183,38 @@ describe("Einstellungen aus der Datei", () => {
     await expect(saveSettings(s)).rejects.toThrow(/nicht lesbar/);
     await expect(saveSettings(s)).rejects.toThrow(/nicht lesbar/);
     expect(saveAufrufe()).toHaveLength(0);
+    // Die Oberflaeche zeigt dann eine Statuszeile (K7).
+    expect(settingsSaveBlocked()).toBe(true);
     fehler.mockRestore();
   });
 
-  it("eine kaputte Datei fuehrt zu Standardwerten ohne Uebernahme, Speichern bleibt erlaubt", async () => {
+  it("eine kaputte Datei ohne Altobjekt fuehrt zu Standardwerten, Speichern bleibt erlaubt", async () => {
     mockLoad("corrupt");
-    legacyMock.mockReturnValue({ liteLLM: { baseURL: "http://alt:4000" } });
     const fehler = vi.spyOn(console, "error").mockImplementation(() => {});
     const s = await loadSettings();
     fehler.mockRestore();
     expect(s).toEqual(defaultSettings);
-    expect(legacyMock).not.toHaveBeenCalled();
+    expect(legacyMock).toHaveBeenCalled();
     expect(saveAufrufe()).toHaveLength(0);
     s.hotkeyMode = "toggle";
     await saveSettings(s);
     expect(saveAufrufe()).toHaveLength(1);
     expect(JSON.parse(saveAufrufe()[0]).hotkeyMode).toBe("toggle");
+  });
+
+  it("nach einer kaputten Datei kommen die Altwerte zurueck und werden gespeichert", async () => {
+    // Sonst ist nach einem Defekt die Gateway-Adresse weg und das erste Diktat scheitert.
+    mockLoad("corrupt");
+    legacyMock.mockReturnValue({ liteLLM: { baseURL: "http://alt:4000" } });
+    const fehler = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = await loadSettings();
+    fehler.mockRestore();
+    expect(legacyMock).toHaveBeenCalled();
+    expect(s.liteLLM.baseURL).toBe("http://alt:4000");
+    const saves = saveAufrufe();
+    expect(saves).toHaveLength(1);
+    expect(JSON.parse(saves[0]).liteLLM.baseURL).toBe("http://alt:4000");
+    expect(settingsSaveBlocked()).toBe(false);
   });
 
   it("eine vorhandene leere Datei loest keine Uebernahme aus", async () => {
@@ -207,6 +223,33 @@ describe("Einstellungen aus der Datei", () => {
     const s = await loadSettings();
     expect(s).toEqual(defaultSettings);
     expect(legacyMock).not.toHaveBeenCalled();
+  });
+
+  it("behaelt in modes nur gueltige Eintraege und nur bekannte Farben", async () => {
+    const gut = { id: "custom-1", name: "Mail", icon: "envelope", prompt: "Schreib eine Mail." };
+    mockLoad(
+      "ok",
+      JSON.stringify({
+        modes: [
+          null,
+          gut,
+          { ...gut, id: "custom-2", color: "night" },
+          { ...gut, id: "custom-3", color: "pink" },
+          { ...gut, id: 4 },
+          { id: "custom-5", name: "ohne Symbol", prompt: "" },
+          { ...gut, id: "custom-6", prompt: null },
+          "custom-7",
+          ["custom-8"],
+          { ...gut, id: "custom-9", name: 9 },
+        ],
+      }),
+    );
+    const s = await loadSettings();
+    expect(s.modes).toEqual([
+      gut,
+      { ...gut, id: "custom-2", color: "night" },
+      { ...gut, id: "custom-3" },
+    ]);
   });
 
   it("saveSettings schickt das ganze Objekt als JSON an den Kern", async () => {

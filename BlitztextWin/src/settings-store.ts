@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { defaultSettings, readLegacySettings, type Settings } from "./config";
+import type { CustomMode } from "./modes";
 
 // Einstellungen liegen als settings.json im Konfigurationsordner der App und
 // werden vom Rust-Kern gelesen und geschrieben (settings_load/settings_save).
@@ -38,6 +39,27 @@ function ueberStandard<T extends object>(standard: T, gespeichert: unknown): T {
   return ergebnis as T;
 }
 
+const FARBEN: readonly unknown[] = ["day", "evening", "night"];
+
+// Nur Eintraege, mit denen der Start rechnen kann: ein Objekt mit Text in id,
+// name, icon und prompt. Alles andere fiele spaeter beim Start um, noch vor dem
+// Anmelden der Kuerzel. Eine unbekannte Farbe faellt weg (gilt dann als
+// Violett); weitere Felder bleiben erhalten wie sonst in der Datei.
+function gueltigeModi(wert: unknown): CustomMode[] {
+  if (!Array.isArray(wert)) return [];
+  const modi: CustomMode[] = [];
+  for (const eintrag of wert) {
+    if (!istObjekt(eintrag)) continue;
+    const { id, name, icon, prompt } = eintrag;
+    if (typeof id !== "string" || typeof name !== "string") continue;
+    if (typeof icon !== "string" || typeof prompt !== "string") continue;
+    const modus = structuredClone(eintrag);
+    if ("color" in modus && !FARBEN.includes(modus.color)) delete modus.color;
+    modi.push(modus as unknown as CustomMode);
+  }
+  return modi;
+}
+
 // Dieselben Regeln wie das fruehere loadSettings in config.ts: oben flach
 // zusammenfuehren, liteLLM, hotkeys, improve und emoji einzeln ueber ihre
 // Standardwerte legen, ein leerer Dampf-Prompt faellt auf den Standardtext.
@@ -54,7 +76,7 @@ function zusammenfuehren(gespeichert: unknown): Settings {
     ...ueberStandard(defaultSettings, roh),
     liteLLM: ueberStandard(defaultSettings.liteLLM, roh.liteLLM),
     hotkeys,
-    modes: Array.isArray(roh.modes) ? structuredClone(roh.modes) : [],
+    modes: gueltigeModi(roh.modes),
     improve: ueberStandard(defaultSettings.improve, roh.improve),
     // Ein leerer gespeicherter Dampf-Prompt faellt auf den Standardtext zurueck,
     // damit die vorausgefuellte Anweisung immer sichtbar (und editierbar) ist.
@@ -83,6 +105,11 @@ export function resetSettingsStoreForTests(): void {
   speichernGesperrt = false;
 }
 
+// Fuer die Statuszeile: wahr, wenn in dieser Sitzung nichts gespeichert wird.
+export function settingsSaveBlocked(): boolean {
+  return speichernGesperrt;
+}
+
 export async function loadSettings(): Promise<Settings> {
   speichernGesperrt = false;
   let datei: DateiStatus;
@@ -107,9 +134,11 @@ export async function loadSettings(): Promise<Settings> {
       return zusammenfuehren(gespeichert);
     }
     case "corrupt":
-      // Der Kern hat die kaputte Datei als settings.json.defekt gesichert.
+      // Der Kern hat die kaputte Datei als settings.json.defekt gesichert. Wie
+      // bei einer fehlenden Datei die Altwerte uebernehmen, sonst waere etwa
+      // die Gateway-Adresse weg und das erste Diktat scheiterte.
       console.error("Einstellungsdatei war beschaedigt, sie liegt als settings.json.defekt daneben.");
-      return zusammenfuehren({});
+      break;
     case "missing":
       break;
     default:
@@ -118,9 +147,9 @@ export async function loadSettings(): Promise<Settings> {
       return zusammenfuehren({});
   }
 
-  // Noch keine Datei: einmalig die Einstellungen aus dem localStorage
-  // uebernehmen und sofort in die Datei schreiben. Der localStorage bleibt
-  // stehen, als Rueckweg.
+  // Noch keine (oder eine kaputte, schon gesicherte) Datei: die Einstellungen
+  // aus dem localStorage uebernehmen und sofort in die Datei schreiben. Der
+  // localStorage bleibt stehen, als Rueckweg.
   const alt = readLegacySettings();
   const settings = zusammenfuehren(alt);
   if (istObjekt(alt)) {

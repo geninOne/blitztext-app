@@ -19,10 +19,11 @@ pub fn normalize_base(base: &str) -> String {
     value
 }
 
-/// Ergebnis beim Lesen der Einstellungsdatei. Nur `Missing` darf zur
-/// Uebernahme aus dem localStorage fuehren; bei `Unreadable` darf die
-/// Oberflaeche in dieser Sitzung nicht speichern, damit eine nur kurz gesperrte
-/// Datei (Virenscanner, OneDrive) nicht ueberschrieben wird.
+/// Ergebnis beim Lesen der Einstellungsdatei. `Missing` und `Corrupt` fuehren
+/// zur Uebernahme aus dem localStorage (eine kaputte Datei ist vorher
+/// gesichert); bei `Unreadable` darf die Oberflaeche in dieser Sitzung nicht
+/// speichern, damit eine nur kurz gesperrte Datei (Virenscanner, OneDrive)
+/// nicht ueberschrieben wird.
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum SettingsRead {
@@ -38,9 +39,11 @@ pub enum SettingsRead {
 }
 
 /// Liest die Einstellungsdatei und unterscheidet fehlend, gueltig, kaputt und
-/// unlesbar. Eine kaputte Datei wird vorher nach "<path>.defekt" kopiert (eine
-/// fruehere Sicherung wird ersetzt). Scheitert diese Sicherung, gilt die Datei
-/// als unlesbar, damit sie nicht ungesichert ueberschrieben wird.
+/// unlesbar. Ein fuehrendes UTF-8-BOM (so speichert etwa der Windows-Editor)
+/// wird entfernt, die Datei gilt dann als gueltig. Eine kaputte Datei wird
+/// vorher nach "<path>.defekt" kopiert (eine fruehere Sicherung wird ersetzt).
+/// Scheitert diese Sicherung, gilt die Datei als unlesbar, damit sie nicht
+/// ungesichert ueberschrieben wird.
 pub fn read_settings_file(path: &Path) -> SettingsRead {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -48,6 +51,10 @@ pub fn read_settings_file(path: &Path) -> SettingsRead {
         Err(_) => return SettingsRead::Unreadable,
     };
     if let Ok(text) = String::from_utf8(bytes) {
+        let text = match text.strip_prefix('\u{FEFF}') {
+            Some(ohne_bom) => ohne_bom.to_string(),
+            None => text,
+        };
         if let Ok(serde_json::Value::Object(_)) = serde_json::from_str::<serde_json::Value>(&text) {
             return SettingsRead::Ok { json: text };
         }
@@ -149,6 +156,20 @@ mod tests {
             serde_json::to_string(&SettingsRead::Unreadable).unwrap(),
             r#"{"status":"unreadable"}"#
         );
+    }
+
+    #[test]
+    fn fuehrendes_bom_wird_entfernt_und_die_datei_gilt_als_gueltig() {
+        // Der Windows-Editor speichert UTF-8 gern mit Byte-Order-Mark.
+        let dir = testverzeichnis("bom");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "\u{FEFF}{\"hotkeyMode\":\"toggle\"}").unwrap();
+        assert_eq!(
+            read_settings_file(&path),
+            SettingsRead::Ok { json: r#"{"hotkeyMode":"toggle"}"#.to_string() }
+        );
+        assert!(!dir.join("settings.json.defekt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
