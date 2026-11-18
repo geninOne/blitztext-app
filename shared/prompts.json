@@ -29,5 +29,38 @@
 
   "transcription": {
     "vocabularyPrefixTemplate": "Eigennamen und Begriffe: {{terms}}"
-  }
+  },
+
+  "modeTemplates": [
+    {
+      "id": "email",
+      "name": "Als E-Mail",
+      "icon": "envelope.fill",
+      "prompt": "Du schreibst aus einem gesprochenen Transkript eine E-Mail auf Deutsch. Behalte die Perspektive wie gesprochen („ich“ bleibt „ich“, „wir“ bleibt „wir“).\nRegeln:\n- Beginne direkt mit der Anrede. Wird ein Name genannt, nutze ihn („Hallo Jana,“), sonst „Hallo,“.\n- Danach die Anliegen in ein bis drei kurzen Absätzen, zusammengehörige Sätze in einem Absatz.\n- Jede Bitte, jede Frist und jeder Termin aus dem Transkript bleibt erhalten. Erfinde nichts dazu.\n- Ende mit einem kurzen Gruß wie „Viele Grüße“.\n- Schreibe keine Betreffzeile und keine Erklärungen."
+    },
+    {
+      "id": "bullets",
+      "name": "Stichpunkte",
+      "icon": "list.bullet",
+      "prompt": "Fasse das gesprochene Transkript als Stichpunkte auf Deutsch zusammen.\nRegeln:\n- Ein Gedanke pro Zeile, jede Zeile beginnt mit „- “.\n- Behalte Namen, Fristen und Zahlen. Erfinde nichts dazu.\n- Aufgaben kennzeichnest du am Zeilenanfang mit „To-do:“.\n- Keine Einleitung, keine Überschrift."
+    },
+    {
+      "id": "reply",
+      "name": "Antworten",
+      "icon": "arrowshape.turn.up.left.fill",
+      "prompt": "Du formulierst aus einem gesprochenen Transkript eine Antwort auf Deutsch. Das Transkript sagt, was geantwortet werden soll.\nRegeln:\n- Steht im Kontext eine Nachricht, antworte passend darauf: gleiche Anrede (du oder Sie), gleicher Ton, Bezug auf die Punkte, die das Transkript anspricht.\n- Übernimm Zusagen, Absagen, Termine und Bedingungen genau so, wie sie gesprochen wurden. Erfinde nichts dazu.\n- Kurz und klar, ohne Betreffzeile und ohne Erklärungen. Gib nur den Antworttext zurück."
+    },
+    {
+      "id": "english",
+      "name": "Auf Englisch",
+      "icon": "globe",
+      "prompt": "Übersetze das gesprochene Transkript in natürliches, klares Englisch.\nBehalte Ton, Perspektive und Bedeutung, glätte gesprochene Wiederholungen. Erfinde nichts dazu.\nGib nur die Übersetzung zurück."
+    },
+    {
+      "id": "summary",
+      "name": "Kurzfassung",
+      "icon": "text.append",
+      "prompt": "Fasse das gesprochene Transkript in zwei bis drei klaren Sätzen auf Deutsch zusammen.\nDas Wichtigste zuerst, Namen und Fristen bleiben erhalten. Erfinde nichts dazu.\nGib nur die Zusammenfassung zurück."
+    }
+  ]
 }

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import promptData from "../../shared/prompts.json";
+import type { CustomMode } from "./modes";
 
 export type ApiProvider = "openAI" | "liteLLM";
 
@@ -26,7 +27,11 @@ export interface Settings {
   // Global hotkeys per workflow, as accelerator strings (e.g. "Super+Shift+KeyD").
   // "Super" is the Windows key (= Cmd on the Mac dev machine). Key names follow
   // the W3C KeyboardEvent.code values, so the in-app recorder can store them 1:1.
-  hotkeys: Record<WorkflowType, string>;
+  // Der Schluessel ist die Modus-ID; die vier alten Workflow-Namen bleiben
+  // vorerst als Eintraege stehen, bis die Uebernahme sie in Modi umwandelt.
+  hotkeys: Record<string, string>;
+  // Eigene Modi, wie auf dem Mac frei anlegbar.
+  modes: CustomMode[];
   // Per-workflow tuning, mirroring the macOS app's "Anpassen" tab.
   improve: {
     tone: TextTone;
@@ -95,6 +100,7 @@ export const defaultSettings: Settings = {
     dampf: "Super+Shift+KeyA",
     emoji: "Super+Shift+KeyE",
   },
+  modes: [],
   improve: {
     tone: "neutral",
     systemPrompt: "",
