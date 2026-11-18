@@ -126,6 +126,7 @@ git commit -m "Windows: Testfundament fuer TypeScript und Rust"
 
 **Files:**
 - Modify: `shared/prompts.json` (Schluessel `modeTemplates`)
+- Modify: `BlitztextWin/src/config.ts` (Feld `modes`, `hotkeys` nach Modus-ID)
 - Create: `BlitztextWin/src/modes.ts`
 - Create: `BlitztextWin/src/modes.test.ts`
 
@@ -138,6 +139,9 @@ git commit -m "Windows: Testfundament fuer TypeScript und Rust"
   - `modeTemplates(): CustomMode[]`
   - `systemPromptForMode(mode: CustomMode, terms: string[], context: string): string | null`
     (`null`, wenn der Modus keine Anweisung hat)
+  - `Settings` in `src/config.ts` bekommt `modes: CustomMode[]` (Standard: leer)
+    und `hotkeys: Record<string, string>` (Schluessel ist die Modus-ID statt
+    des festen Workflow-Namens). Alle spaeteren Aufgaben bauen darauf auf.
 
 - [ ] **Schritt 1: Fehlschlagende Tests schreiben**
 
@@ -160,9 +164,9 @@ it("haengt Eigennamen und Kontext an die Anweisung", () => {
   expect(prompt).toContain("Team evia");
 });
 
-it("liefert die Vorlagen aus shared/prompts.json", () => {
+it("liefert die fuenf Vorlagen aus shared/prompts.json", () => {
   const namen = modeTemplates().map((m) => m.name);
-  expect(namen).toContain("Antwort auf eine Mail");
+  expect(namen).toEqual(["Als E-Mail", "Stichpunkte", "Antworten", "Auf Englisch", "Kurzfassung"]);
 });
 ```
 
@@ -176,9 +180,17 @@ Expected: FAIL, `src/modes.ts` fehlt.
 Neuer Schluessel `modeTemplates`, ein Eintrag je Vorlage mit `id`, `name`,
 `icon`, `prompt`. Die Vorlagen und ihre Texte werden aus
 `BlitztextShared/Modes/CustomMode.swift` (`CustomModeTemplate`) uebernommen,
-damit beide Apps dieselben anbieten.
+damit beide Apps dieselben anbieten. Es sind genau fuenf, in dieser Reihenfolge:
+`email` ("Als E-Mail"), `bullets` ("Stichpunkte"), `reply` ("Antworten"),
+`english` ("Auf Englisch"), `summary` ("Kurzfassung"). Prompttexte und
+Symbolnamen Zeichen fuer Zeichen aus der Swift-Datei uebernehmen.
 
-- [ ] **Schritt 4: `src/modes.ts` umsetzen**
+- [ ] **Schritt 4: `src/modes.ts` umsetzen und `Settings` erweitern**
+
+In `src/config.ts` bekommt `Settings` das Feld `modes: CustomMode[]`
+(Standard leer), und `hotkeys` wird von `Record<WorkflowType, string>` auf
+`Record<string, string>` umgestellt, Schluessel ist die Modus-ID. `WorkflowType`
+bleibt vorerst stehen, Aufgabe 7 braucht ihn fuer die Uebernahme.
 
 Die vier Funktionen aus dem Interfaces-Block. `systemPromptForMode` setzt
 zusammen wie `ModePrompts` auf dem Mac: die Anweisung des Modus, danach die
@@ -192,7 +204,7 @@ Expected: PASS, vier Tests.
 - [ ] **Schritt 6: Commit**
 
 ```bash
-git add shared/prompts.json BlitztextWin/src/modes.ts BlitztextWin/src/modes.test.ts
+git add shared/prompts.json BlitztextWin/src/config.ts BlitztextWin/src/modes.ts BlitztextWin/src/modes.test.ts
 git commit -m "Windows: Modusmodell und Vorlagen aus shared/"
 ```
 
