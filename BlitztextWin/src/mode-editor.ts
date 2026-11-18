@@ -59,6 +59,9 @@ export interface ModeEvents {
   hotkeyDisplay(id: string): HTMLElement;
   // Abzeichen samt Knoepfen zum Aufnehmen und Entfernen, ebenfalls aus dem Rekorder.
   hotkeyEditor(id: string): HTMLElement;
+  // Vor jedem Zeichnen, auch beim Auf- und Zuklappen; popover.ts beendet hier
+  // eine laufende Kuerzel-Aufnahme, deren Knopf gleich verschwindet.
+  beforeRender?(): void;
 }
 
 const COLORS: { value: ModeColor; label: string }[] = [
@@ -108,6 +111,7 @@ export function renderModeList(container: HTMLElement, settings: Settings, on: M
   openState.set(container, state);
   const rerender = () => renderModeList(container, settings, on);
 
+  on.beforeRender?.();
   container.innerHTML = "";
 
   if (settings.modes.length === 0) {

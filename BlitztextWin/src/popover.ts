@@ -15,7 +15,9 @@ import {
   type HotkeyMode,
 } from "./config";
 import { systemPromptFor } from "./prompts";
-import { loadSettings, saveSettings } from "./settings-store";
+import { loadSettings, saveSettings, settingsSaveBlocked } from "./settings-store";
+import { accelParts, captureFromKey, isEditableTarget } from "./accelerator";
+import { RecordingState } from "./recording-state";
 import {
   addMode,
   assignHotkey,
@@ -58,30 +60,6 @@ function setupSegmented(
     }),
   );
   render(current);
-}
-
-// Accelerator strings use W3C KeyboardEvent.code names ("Super+Shift+KeyD").
-// Ohne Kuerzel (fehlender Eintrag) gibt es keine Abzeichen.
-function accelParts(accel: string | undefined): string[] {
-  if (!accel) return [];
-  return accel.split("+").map((part) => {
-    if (part === "Super") return "Win";
-    if (part === "Control") return "Ctrl";
-    if (part.startsWith("Key")) return part.slice(3);
-    if (part.startsWith("Digit")) return part.slice(5);
-    return part;
-  });
-}
-
-function accelFromEvent(event: KeyboardEvent): string | null {
-  if (/^(Meta|Control|Alt|Shift)(Left|Right)$/.test(event.code)) return null;
-  const mods: string[] = [];
-  if (event.metaKey) mods.push("Super");
-  if (event.ctrlKey) mods.push("Control");
-  if (event.altKey) mods.push("Alt");
-  if (event.shiftKey) mods.push("Shift");
-  if (mods.length === 0 || !event.code) return null;
-  return [...mods, event.code].join("+");
 }
 
 // Monochrome SVG row glyphs (mic / check / flame / smile).
@@ -129,6 +107,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   let startChanged = seedCustomModesIfNeeded(settings);
   if (removeCustomModeOrphans(settings)) startChanged = true;
   const history: HistoryEntry[] = [];
+  // Kennung, fuer die der Rekorder gerade eine Tastenkombination aufnimmt.
+  // Steht hier oben, weil schon renderRows die Aufnahme beendet.
+  let capturing: HotkeyTarget | null = null;
 
   // --- View switching (menu <-> settings, in the same popover) ---
   const viewMenu = el("view-menu");
@@ -161,6 +142,17 @@ window.addEventListener("DOMContentLoaded", async () => {
     statusEl.className = `status ${cls}`.trim();
   }
 
+  // Unlesbare Einstellungsdatei: dauerhaft sichtbar in Menue und Einstellungen,
+  // nicht in der Statuszeile, die das naechste Diktat ueberschreibt. Sonst legen
+  // Nutzer Modi neu an, die gerade nur nicht geladen wurden.
+  if (settingsSaveBlocked()) {
+    for (const warning of document.querySelectorAll<HTMLElement>(".settings-warning")) {
+      warning.textContent =
+        "Einstellungen konnten nicht gelesen werden, Änderungen werden in dieser Sitzung nicht gespeichert. Bitte Blitztext neu starten.";
+      warning.hidden = false;
+    }
+  }
+
   const list = el("workflow-list");
   // Eine Menuezeile. Name, Untertitel und Kuerzel kommen ueber textContent,
   // weil Modusnamen und Kuerzel aus der Einstellungsdatei stammen.
@@ -181,19 +173,29 @@ window.addEventListener("DOMContentLoaded", async () => {
     text.append(nameEl, subEl);
     const badges = document.createElement("div");
     badges.className = "badges";
-    for (const key of accelParts(settings.hotkeys[id])) {
-      const badge = document.createElement("span");
-      badge.className = "key";
-      badge.textContent = key;
-      badges.append(badge);
-    }
+    fillBadges(badges, id);
     row.append(iconBox, text, badges);
     row.addEventListener("click", () => void startFromRow(target));
     return row;
   }
 
+  // Abzeichen eines Kuerzels, ueber textContent: der Text stammt aus der
+  // Einstellungsdatei und darf nie als HTML gelesen werden.
+  function fillBadges(display: HTMLElement, id: string): void {
+    display.replaceChildren(
+      ...accelParts(settings.hotkeys[id]).map((key) => {
+        const badge = document.createElement("span");
+        badge.className = "key";
+        badge.textContent = key;
+        return badge;
+      }),
+    );
+  }
+
   // Erst die vier eingebauten Modi, darunter die eigenen, wie menuModes auf dem Mac.
   function renderRows(): void {
+    // Ein Neuzeichnen beendet eine laufende Kuerzel-Aufnahme (siehe endCapture).
+    endCapture("");
     list.replaceChildren();
     for (const workflow of WORKFLOW_ORDER) {
       // ICONS ist fest im Code, daher hier innerHTML.
@@ -217,8 +219,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Recording is done natively in the Rust core (cpal -> 16-bit mono WAV) for
   // deterministic, high quality. record_start begins capture; record_stop
   // returns the WAV as base64, which we transcribe -> optionally rewrite -> paste.
-  let recording = false;
-  let busy = false;
+  // Phase der Aufnahme, siehe recording-state.ts: ein Stopp waehrend
+  // record_start wird gemerkt, statt verloren zu gehen.
+  const rec = new RecordingState();
   // Der Modus haelt den Stand beim Start fest; eine Aenderung im Editor
   // ersetzt das Objekt in settings.modes und trifft diese Aufnahme nicht.
   let currentTarget: ModeTarget = { kind: "builtIn", workflow: "transcribe" };
@@ -273,23 +276,43 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function startRecording(target: ModeTarget): Promise<void> {
-    if (recording || busy) return;
+    if (!rec.beginStart()) return;
     currentTarget = target;
     try {
       await invoke("record_start");
-      recording = true;
-      await invoke("set_recording", { active: true });
-      setStatus(`Aufnahme (${statusLabel(target)}) ...`, "recording");
     } catch (error) {
+      rec.startFailed();
       setStatus(`Mikrofon-Fehler: ${error}`);
       await invoke("set_recording", { active: false });
+      return;
+    }
+    if (rec.started() === "discard") {
+      // Waehrend des Starts losgelassen: zu kurz. Mikrofon sofort schliessen,
+      // nichts transkribieren, nichts einfuegen.
+      try {
+        await invoke("record_stop");
+      } catch (error) {
+        console.error("Verworfene Aufnahme nicht sauber beendet:", error);
+      }
+      setStatus("Bereit");
+      try {
+        await invoke("set_recording", { active: false });
+      } finally {
+        rec.finished();
+      }
+      return;
+    }
+    setStatus(`Aufnahme (${statusLabel(target)}) ...`, "recording");
+    try {
+      await invoke("set_recording", { active: true });
+    } catch (error) {
+      console.error("Aufnahmezustand nicht gemeldet:", error);
     }
   }
 
   async function finishRecording(): Promise<void> {
-    if (!recording) return;
-    recording = false;
-    busy = true;
+    // Beim Start gemerkt ("deferred") oder nichts zu tun ("ignore").
+    if (rec.requestStop() !== "finish") return;
     try {
       const audioBase64 = await invoke<string>("record_stop");
       setStatus("Transkribiere ...", "busy");
@@ -327,7 +350,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     } catch (error) {
       setStatus(`Fehler: ${error}`);
     } finally {
-      busy = false;
+      rec.finished();
       await invoke("set_recording", { active: false });
     }
   }
@@ -339,7 +362,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Click a row: hide the popover (so focus + paste return to the active app),
   // then record in toggle mode. A tray click stops it (via "popover-stop").
   async function startFromRow(target: ModeTarget): Promise<void> {
-    if (recording) {
+    if (rec.canStop) {
       stopRecording();
       return;
     }
@@ -351,21 +374,23 @@ window.addEventListener("DOMContentLoaded", async () => {
   // up stops); "toggle" = press to start, press again (or Esc/tray) to stop.
   let lastHotkeyDown = 0;
   // Die Kennung ist ein eingebauter Name oder "custom-..."; eine unbekannte
-  // (Modus geloescht) loest nichts aus.
+  // (Modus geloescht) startet nichts. Im Umschaltmodus beendet aber jedes
+  // Kuerzel eine laufende Aufnahme, auch eines mit unbekannter Kennung.
   await listen<string>("hotkey-down", (event) => {
-    const target = resolveModeId(event.payload ?? "", settings.modes);
-    if (!target) return;
     if (settings.hotkeyMode === "toggle") {
       // Ignore OS key auto-repeat so a held key doesn't flip start/stop.
       const now = performance.now();
       const isRepeat = now - lastHotkeyDown < 500;
       lastHotkeyDown = now;
       if (isRepeat) return;
-      if (recording) stopRecording();
-      else void startRecording(target);
-    } else {
-      void startRecording(target); // hold: re-entry is ignored in startRecording
+      if (rec.canStop) {
+        stopRecording();
+        return;
+      }
     }
+    const target = resolveModeId(event.payload ?? "", settings.modes);
+    if (!target) return;
+    void startRecording(target); // re-entry is ignored in startRecording
   });
   // Loslassen beendet eine laufende Aufnahme immer, auch wenn der Modus
   // inzwischen geloescht ist; stopRecording tut ohne Aufnahme nichts.
@@ -403,8 +428,12 @@ window.addEventListener("DOMContentLoaded", async () => {
 
       const head = document.createElement("div");
       head.className = "hist-head";
-      head.innerHTML = `<span class="wf"></span><span> · ${entry.time}</span>`;
-      head.querySelector(".wf")!.textContent = entry.label;
+      const wf = document.createElement("span");
+      wf.className = "wf";
+      wf.textContent = entry.label;
+      const time = document.createElement("span");
+      time.textContent = ` · ${entry.time}`;
+      head.append(wf, time);
 
       const audio = document.createElement("audio");
       audio.controls = true;
@@ -649,7 +678,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   updateInstallEl.addEventListener("click", async () => {
     if (!verfuegbaresUpdate) return;
-    if (recording || busy) {
+    if (rec.active) {
       updateStatusEl.textContent =
         "Blitztext nimmt gerade auf. Das Update läuft, sobald die Aufnahme fertig ist.";
       return;
@@ -671,7 +700,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       // globaler Hotkey kann in dieser Zeit eine Aufnahme gestartet haben.
       // Ein Neustart mitten im Diktat waere Datenverlust. Bis hierher ist ein
       // Abbruch folgenlos, ab install() nicht mehr.
-      if (recording || busy) {
+      if (rec.active) {
         updateStatusEl.textContent =
           "Blitztext nimmt gerade auf. Das Update läuft, sobald die Aufnahme fertig ist.";
         updateInstallEl.disabled = false;
@@ -781,7 +810,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   const hotkeyStatus = el("hotkey-status");
   const hotkeyList = el("hotkey-list");
   const displays = new Map<string, HTMLElement[]>();
-  let capturing: HotkeyTarget | null = null;
 
   function labelFor(id: string): string {
     if ((WORKFLOW_ORDER as string[]).includes(id)) return workflowLabels[id as WorkflowType];
@@ -797,12 +825,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     displays.set(id, [...(displays.get(id) ?? []), display]);
     fillBadges(display, id);
     return display;
-  }
-
-  function fillBadges(display: HTMLElement, id: string): void {
-    display.innerHTML = accelParts(settings.hotkeys[id])
-      .map((key) => `<span class="key">${key}</span>`)
-      .join("");
   }
 
   // Abzeichen frueherer Neuzeichnungen haengen nicht mehr im Dokument und fallen weg.
@@ -853,6 +875,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     flash(target.status, `${target.label()}: Kürzel entfernt`);
   }
 
+  // Beendet eine Kuerzel-Aufnahme. Laeuft auch bei jedem Neuzeichnen und sobald
+  // ein Eingabefeld Fokus bekommt: sonst bliebe der Rekorder unsichtbar aktiv
+  // und naehme das naechste Tippen als globales Kuerzel.
   function endCapture(message: string): void {
     if (capturing) {
       capturing.changeBtn.textContent = "✎";
@@ -916,17 +941,33 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   window.addEventListener("keydown", (event) => {
     if (!capturing) return;
+    // Tippen in ein Feld ist nie ein Kuerzel; es beendet die Aufnahme.
+    if (isEditableTarget(event.target as HTMLElement | null)) {
+      endCapture("");
+      return;
+    }
     event.preventDefault();
     if (event.code === "Escape") {
       endCapture("Abgebrochen");
       return;
     }
-    const accel = accelFromEvent(event);
-    if (!accel) return;
+    const result = captureFromKey(event);
+    if (result.kind === "wait") return;
+    if (result.kind === "reject") {
+      // Weiter aufnehmen, damit gleich eine gueltige Kombination folgen kann.
+      capturing.status.textContent = `${capturing.label()}: ${result.reason} (Esc bricht ab).`;
+      return;
+    }
     const target = capturing;
     endCapture("");
-    void applyHotkey(target, accel);
+    void applyHotkey(target, result.accel);
   });
+  // Fokus oder Klick in ein Feld beendet die Aufnahme.
+  const endCaptureOnEditable = (event: Event) => {
+    if (capturing && isEditableTarget(event.target as HTMLElement | null)) endCapture("");
+  };
+  document.addEventListener("focusin", endCaptureOnEditable, true);
+  document.addEventListener("pointerdown", endCaptureOnEditable, true);
 
   // --- Eigene Modi ---
   const modeList = el("mode-list");
@@ -955,6 +996,8 @@ window.addEventListener("DOMContentLoaded", async () => {
       renderRows();
     },
     hotkeyDisplay,
+    // Auch das Auf- und Zuklappen im Editor zeichnet neu, ohne renderModes.
+    beforeRender: () => endCapture(""),
     hotkeyEditor(id) {
       const wrap = document.createElement("div");
       wrap.className = "hotkey-row";
@@ -971,6 +1014,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     },
   };
   function renderModes(): void {
+    // endCapture laeuft ueber modeEvents.beforeRender.
     renderModeList(modeList, settings, modeEvents);
     pruneDisplays();
   }

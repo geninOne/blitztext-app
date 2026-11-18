@@ -87,6 +87,10 @@
       .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
       .status.recording .dot { background: #ff5d5d; }
       .status.busy .dot { background: var(--accent); }
+      /* Bleibt stehen, solange die Einstellungsdatei nicht gelesen werden konnte. */
+      .settings-warning {
+        margin: 0 16px 10px; font-size: 11.5px; line-height: 1.35; color: #ff5d5d;
+      }
 
       .whisper {
         display: flex; align-items: center; gap: 10px;
@@ -221,6 +225,7 @@
           <span class="dot"></span>
           <span id="status-text">Bereit</span>
         </div>
+        <p class="settings-warning" hidden></p>
 
         <div class="whisper">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -247,6 +252,7 @@
         </div>
 
         <div class="scroll">
+          <p class="settings-warning" hidden></p>
           <div class="tabs" id="tabs">
             <button type="button" data-tab="customize" class="active">Anpassen</button>
             <button type="button" data-tab="access">Zugang</button>
