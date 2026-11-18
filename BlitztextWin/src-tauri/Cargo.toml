@@ -34,4 +34,6 @@ enigo = "0.3"
 arboard = "3"
 cpal = "0.15"
 hound = "3"
+# Sprache der Anweisungen fuer eigene Modi (detect_language), fest gepinnt.
+whatlang = "=0.18.0"
 

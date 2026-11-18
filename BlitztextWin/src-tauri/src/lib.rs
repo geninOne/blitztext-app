@@ -1,3 +1,36 @@
+mod hotkeys;
+mod settings;
+mod language;
+
+use settings::normalize_base;
+
+const SETTINGS_FILE: &str = "settings.json";
+
+fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(dir.join(SETTINGS_FILE))
+}
+
+/// Liest die gespeicherten Einstellungen samt Status (fehlend, ok, kaputt,
+/// unlesbar), siehe `settings::SettingsRead`. Der API-Schluessel liegt nie hier,
+/// sondern im Schluesselbund (`secret_set`).
+#[tauri::command]
+fn settings_load(app: tauri::AppHandle) -> Result<settings::SettingsRead, String> {
+    Ok(settings::read_settings_file(&settings_path(&app)?))
+}
+
+/// Speichert die Einstellungen. Nur ein JSON-Objekt wird angenommen, damit kein
+/// fehlerhafter Aufruf die Datei mit Unsinn ueberschreibt.
+#[tauri::command]
+fn settings_save(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(serde_json::Value::Object(_)) => {}
+        _ => return Err("Einstellungen sind kein JSON-Objekt".to_string()),
+    }
+    settings::write_settings_file(&settings_path(&app)?, &json).map_err(|e| e.to_string())
+}
+
 // Secret storage backed by the OS credential store
 // (macOS Keychain via apple-native, Windows Credential Manager via windows-native).
 const KEYRING_SERVICE: &str = "app.blitztext.win";
@@ -29,24 +62,6 @@ fn secret_has(account: String) -> Result<bool, String> {
 fn litellm_key() -> Result<String, String> {
     secret_get(LITELLM_KEY_ACCOUNT.to_string())?
         .ok_or_else(|| "Kein API-Key gespeichert.".to_string())
-}
-
-/// Normalizes a user-entered gateway URL to the bare base, so we can append the
-/// API paths ourselves. Strips a trailing slash and any trailing `/v1` or `/ui`
-/// segments (in any order) — people often paste the LiteLLM web UI URL
-/// (".../ui") or an OpenAI-style ".../v1" base.
-fn normalize_base(base: &str) -> String {
-    let mut value = base.trim().trim_end_matches('/').to_string();
-    loop {
-        let lower = value.to_lowercase();
-        if lower.ends_with("/v1") || lower.ends_with("/ui") {
-            value.truncate(value.len() - 3);
-            value = value.trim_end_matches('/').to_string();
-        } else {
-            break;
-        }
-    }
-    value
 }
 
 /// Lists the models the gateway exposes. Used by the "test connection" button
@@ -175,6 +190,13 @@ async fn chat_complete(
         .as_str()
         .ok_or_else(|| "Antwort ohne content-Feld.".to_string())?;
     Ok(content.trim().to_string())
+}
+
+/// Sprache der Anweisungen fuer eigene Modi: "en", wenn Englisch erkannt
+/// wird, sonst "de" (siehe language.rs).
+#[tauri::command]
+fn detect_language(text: String) -> String {
+    language::detect(&text).to_string()
 }
 
 // --- Native audio recording (cpal -> WAV) ----------------------------------
@@ -391,6 +413,16 @@ fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
 
 // --- Paste into the active app ---------------------------------------------
 
+/// Legt Text nur in die Zwischenablage, ohne Tastendruck. Fuer einen
+/// gescheiterten Modellschritt: das Gesagte bleibt erhalten, landet aber nicht
+/// im Feld (wie keepTranscript auf dem Mac).
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut cb| cb.set_text(text))
+        .map_err(|e| format!("Zwischenablage: {e}"))
+}
+
 /// Puts `text` on the clipboard and simulates the paste shortcut so it lands in
 /// whatever app currently has focus (our window stays hidden in the tray).
 /// macOS needs Accessibility permission for the synthetic keystroke; Windows
@@ -429,22 +461,24 @@ fn paste_text(text: String) -> Result<(), String> {
 
 // --- Push-to-talk global hotkeys -------------------------------------------
 
-/// Maps each currently registered global shortcut to its workflow id, so the
-/// shared handler knows which workflow to emit and so hotkeys can be rebound at
-/// runtime. The Windows/Super key plays the role `fn` plays on the macOS app.
-#[derive(Default)]
-struct HotkeyMap(std::sync::Mutex<std::collections::HashMap<tauri_plugin_global_shortcut::Shortcut, String>>);
-
-/// Rebinds the global hotkey for a workflow. Accepts an accelerator string
+/// Rebinds the global hotkey for a mode. Accepts an accelerator string
 /// (e.g. "Super+Shift+KeyD"); a real key is required because modifier-only
 /// combos cannot be registered as global shortcuts on Windows. Frees both the
-/// workflow's previous combo and any combo another workflow already holds, so
-/// bindings can never collide or leak.
+/// mode's previous combo and any combo another mode already holds, so
+/// bindings can never collide or leak. If registering the new combo fails,
+/// the freed ones are registered again and the map stays untouched.
+///
+/// Muss ein synchrones Kommando bleiben (kein `async`): die Sperre der
+/// Kuerzel-Map wird ueber die Aufrufe an das Global-Shortcut-Plugin gehalten.
+/// Synchron laeuft das auf dem Hauptthread. Als `async` liefe es auf einem
+/// anderen Thread; das Plugin reicht die Anmeldung dann an den Hauptthread
+/// weiter und wartet, waehrend dort der Kuerzel-Handler (siehe `run`) auf
+/// dieselbe Sperre wartet. Das kann verklemmen.
 #[tauri::command]
 fn set_hotkey(
     app: tauri::AppHandle,
-    state: tauri::State<'_, HotkeyMap>,
-    workflow: String,
+    state: tauri::State<'_, std::sync::Mutex<hotkeys::HotkeyMap>>,
+    mode_id: String,
     accelerator: String,
 ) -> Result<(), String> {
     use std::str::FromStr;
@@ -453,22 +487,43 @@ fn set_hotkey(
     let shortcut =
         Shortcut::from_str(accelerator.trim()).map_err(|e| format!("Ungueltiger Hotkey: {e}"))?;
     let gs = app.global_shortcut();
-    let mut map = state.0.lock().map_err(|e| e.to_string())?;
+    let mut map = state.lock().map_err(|e| e.to_string())?;
 
-    // Release the workflow's old combo and any combo another workflow held.
-    let stale: Vec<Shortcut> = map
-        .iter()
-        .filter(|(s, w)| **w == workflow || **s == shortcut)
-        .map(|(s, _)| *s)
-        .collect();
-    for s in stale {
-        let _ = gs.unregister(s);
-        map.remove(&s);
+    // Release the mode's old combo and any combo another mode held.
+    let freed = map.freed_by(&mode_id, &shortcut);
+    for s in &freed {
+        let _ = gs.unregister(*s);
     }
 
-    gs.register(shortcut)
-        .map_err(|e| format!("Hotkey konnte nicht registriert werden: {e}"))?;
-    map.insert(shortcut, workflow);
+    if let Err(e) = gs.register(shortcut) {
+        // Best effort: die eben abgemeldeten Kuerzel wieder anmelden, die Map
+        // bleibt wie sie war.
+        for s in freed {
+            let _ = gs.register(s);
+        }
+        return Err(format!("Hotkey konnte nicht registriert werden: {e}"));
+    }
+    map.assign(&mode_id, shortcut);
+    Ok(())
+}
+
+/// Gibt das Kuerzel eines Modus frei, zum Beispiel wenn der Modus geloescht
+/// wird. Hat der Modus keins, passiert nichts.
+///
+/// Wie `set_hotkey` bewusst synchron: die Sperre der Map wird ueber den Aufruf
+/// an das Plugin gehalten, ein `async` koennte verklemmen.
+#[tauri::command]
+fn clear_hotkey(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Mutex<hotkeys::HotkeyMap>>,
+    mode_id: String,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let mut map = state.lock().map_err(|e| e.to_string())?;
+    if let Some(shortcut) = map.clear(&mode_id) {
+        let _ = app.global_shortcut().unregister(shortcut);
+    }
     Ok(())
 }
 
@@ -534,38 +589,42 @@ pub fn run() {
         .plugin(
             // Hold-to-talk: the plugin reports both Pressed and Released, so we
             // emit a down/up pair the webview turns into start/stop recording.
-            // The workflow id is looked up from the runtime HotkeyMap.
+            // The mode id is looked up from the runtime HotkeyMap.
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    let workflow = app
-                        .state::<HotkeyMap>()
-                        .0
+                    let mode_id = app
+                        .state::<std::sync::Mutex<hotkeys::HotkeyMap>>()
                         .lock()
                         .ok()
-                        .and_then(|map| map.get(shortcut).cloned());
-                    if let Some(workflow) = workflow {
+                        .and_then(|map| map.mode_for(shortcut).map(str::to_string));
+                    if let Some(mode_id) = mode_id {
                         let _ = match event.state() {
-                            ShortcutState::Pressed => app.emit("hotkey-down", workflow),
-                            ShortcutState::Released => app.emit("hotkey-up", workflow),
+                            ShortcutState::Pressed => app.emit("hotkey-down", mode_id),
+                            ShortcutState::Released => app.emit("hotkey-up", mode_id),
                         };
                     }
                 })
                 .build(),
         )
-        .manage(HotkeyMap::default())
+        .manage(std::sync::Mutex::new(hotkeys::HotkeyMap::default()))
         .manage(RecordingFlag::default())
         .manage(PopoverPinned::default())
         .manage(TrayRect::default())
         .manage(AudioRecorder::default())
         .invoke_handler(tauri::generate_handler![
+            settings_load,
+            settings_save,
             secret_set,
             secret_get,
             secret_has,
             gateway_test,
             transcribe,
             chat_complete,
+            detect_language,
             set_hotkey,
+            clear_hotkey,
             paste_text,
+            copy_text,
             record_start,
             record_stop,
             set_autostart,

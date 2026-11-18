@@ -31,5 +31,49 @@
     "strongModel": { "type": "string", "example": "gpt-5.5" },
     "transcriptionModel": { "type": "string", "example": "gpt-4o-transcribe" },
     "sendsTemperature": false
+  },
+
+  "settingsVersion": {
+    "type": "integer",
+    "default": 1,
+    "description": "Stand des Einstellungsformats. Spaetere Uebernahmen erhoehen ihn. Windows: Feld in settings.json."
+  },
+
+  "customMode": {
+    "type": "object",
+    "description": "Ein frei angelegter Modus, wie CustomMode.swift auf dem Mac. Windows behaelt beim Laden nur Eintraege mit Text in id, name, icon und prompt; eine unbekannte color faellt weg. Weitere Felder bleiben erhalten.",
+    "fields": {
+      "id": { "type": "string", "example": "custom-3f2a9c1e-...", "description": "Form custom-<uuid>. Zugleich der Schluessel in hotkeys." },
+      "name": { "type": "string", "description": "Anzeigename. Leer wird als 'Ohne Namen' angezeigt." },
+      "icon": { "type": "string", "example": "envelope.fill", "description": "SF-Symbol-Name des Macs. Windows bildet ihn ueber mode-icons.json auf ein Lucide-Symbol ab; Unbekanntes faellt auf wand.and.stars zurueck." },
+      "prompt": { "type": "string", "description": "Anweisung an das Sprachmodell. Leer heisst: wortgenau, ohne Modellschritt." },
+      "color": { "type": "enum", "values": ["day", "evening", "night"], "optional": true, "description": "Farbe des Modus. Fehlt sie, gilt evening (Violett)." }
+    }
+  },
+
+  "modes": {
+    "type": "array",
+    "items": "customMode",
+    "default": [],
+    "description": "Die eigenen Modi in Anzeigereihenfolge. Die vier eingebauten Modi (transcribe, improve, dampf, emoji) stehen nicht hier, sie bleiben eingebaut."
+  },
+
+  "hotkeys": {
+    "type": "object",
+    "keys": "Modus-Kennung: transcribe, improve, dampf, emoji oder die id eines eigenen Modus",
+    "values": "Kuerzel als W3C-KeyboardEvent.code-Kette, z. B. Super+Shift+KeyD (Super ist die Windows-Taste)",
+    "default": {
+      "transcribe": "Super+Shift+KeyD",
+      "improve": "Super+Shift+KeyI",
+      "dampf": "Super+Shift+KeyA",
+      "emoji": "Super+Shift+KeyE"
+    },
+    "description": "Windows: globale Kuerzel je Modus-Kennung. Der leere Text \"\" heisst 'bewusst kein Kuerzel' und bleibt nach dem Neustart leer. Ein fehlender Eintrag eines eingebauten Modus bekommt dagegen beim Laden sein Standardkuerzel zurueck. Eine Kombination gehoert immer nur einer Kennung. Der Rekorder verlangt Win, Strg oder Alt; nur Umschalt wird abgelehnt."
+  },
+
+  "hasSeededCustomModes": {
+    "type": "boolean",
+    "default": false,
+    "description": "Wahr, sobald die Startmodi (Als E-Mail, Stichpunkte) einmal angelegt wurden. Danach geloeschte Startmodi kommen nicht wieder."
   }
 }
