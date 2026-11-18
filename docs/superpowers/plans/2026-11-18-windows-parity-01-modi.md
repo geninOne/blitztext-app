@@ -28,24 +28,24 @@ Vite, Vitest, `cargo test`.
 - Modus-IDs haben die Form `custom-<uuid>`, wie auf dem Mac
   (`BlitztextShared/Modes/CustomMode.swift`).
 - Die Einstellungsdatei liegt unter `app_config_dir()/settings.json`.
-- Jede Aufgabe endet mit gruenem `npm test` und `cargo test`.
+- Jede Task endet mit gruenem `npm test` und `cargo test`.
 
 ## Review Focus
 
 - Modus ohne Anweisung: kein Aufruf des Sprachmodells, Text unveraendert
-  (Aufgabe 2).
+  (Task 2).
 - Zwei Modi mit demselben Tastenkuerzel: das zuletzt gesetzte gewinnt, das
-  vorige wird freigegeben, kein doppelt registriertes Kuerzel (Aufgabe 4).
+  vorige wird freigegeben, kein doppelt registriertes Kuerzel (Task 4).
 - Beschaedigte oder halb geschriebene `settings.json`: die App startet mit den
-  Standardwerten statt mit leerem Zustand (Aufgabe 3).
+  Standardwerten statt mit leerem Zustand (Task 3).
 - Geloeschter Modus mit registriertem Kuerzel: das Kuerzel wird freigegeben
-  und loest nichts mehr aus (Aufgabe 5).
+  und loest nichts mehr aus (Task 5).
 - Altdaten aus `localStorage`: genau einmal uebernommen, ein zweiter Start
-  erzeugt keine doppelten Modi (Aufgabe 7).
+  erzeugt keine doppelten Modi (Task 7).
 
 ---
 
-### Aufgabe 1: Testfundament
+### Task 1: Testfundament
 
 **Files:**
 - Modify: `BlitztextWin/package.json` (devDependency `vitest`, Skript `test`)
@@ -122,7 +122,7 @@ git commit -m "Windows: Testfundament fuer TypeScript und Rust"
 
 ---
 
-### Aufgabe 2: Modusmodell und Prompt-Zusammenbau
+### Task 2: Modusmodell und Prompt-Zusammenbau
 
 **Files:**
 - Modify: `shared/prompts.json` (Schluessel `modeTemplates`)
@@ -131,7 +131,7 @@ git commit -m "Windows: Testfundament fuer TypeScript und Rust"
 - Create: `BlitztextWin/src/modes.test.ts`
 
 **Interfaces:**
-- Consumes: Aufgabe 1 (Testlauf).
+- Consumes: Task 1 (Testlauf).
 - Produces:
   - `interface CustomMode { id: string; name: string; icon: string; prompt: string; color?: "day" | "evening" | "night" }`
   - `newMode(name?: string, icon?: string, prompt?: string): CustomMode`
@@ -190,7 +190,7 @@ Symbolnamen Zeichen fuer Zeichen aus der Swift-Datei uebernehmen.
 In `src/config.ts` bekommt `Settings` das Feld `modes: CustomMode[]`
 (Standard leer), und `hotkeys` wird von `Record<WorkflowType, string>` auf
 `Record<string, string>` umgestellt, Schluessel ist die Modus-ID. `WorkflowType`
-bleibt vorerst stehen, Aufgabe 7 braucht ihn fuer die Uebernahme.
+bleibt vorerst stehen, Task 7 braucht ihn fuer die Uebernahme.
 
 Die vier Funktionen aus dem Interfaces-Block. `systemPromptForMode` setzt
 zusammen wie `ModePrompts` auf dem Mac: die Anweisung des Modus, danach die
@@ -210,7 +210,7 @@ git commit -m "Windows: Modusmodell und Vorlagen aus shared/"
 
 ---
 
-### Aufgabe 3: Einstellungen als Datei im Rust-Kern
+### Task 3: Einstellungen als Datei im Rust-Kern
 
 **Files:**
 - Modify: `BlitztextWin/src-tauri/src/settings.rs`
@@ -219,7 +219,7 @@ git commit -m "Windows: Modusmodell und Vorlagen aus shared/"
 - Create: `BlitztextWin/src/settings-store.test.ts`
 
 **Interfaces:**
-- Consumes: Aufgabe 1 (`settings.rs`).
+- Consumes: Task 1 (`settings.rs`).
 - Produces:
   - Rust: `settings_load(app: AppHandle) -> Result<String, String>` gibt den
     Dateiinhalt als JSON-Text zurueck, bei fehlender oder unlesbarer Datei
@@ -297,14 +297,14 @@ git commit -m "Windows: Einstellungen liegen in einer Datei statt im localStorag
 
 ---
 
-### Aufgabe 4: Tastenkuerzel je Modus
+### Task 4: Tastenkuerzel je Modus
 
 **Files:**
 - Create: `BlitztextWin/src-tauri/src/hotkeys.rs`
 - Modify: `BlitztextWin/src-tauri/src/lib.rs` (`set_hotkey` nimmt eine Modus-ID)
 
 **Interfaces:**
-- Consumes: Aufgabe 2 (Modus-IDs), Aufgabe 3 (Ablage).
+- Consumes: Task 2 (Modus-IDs), Task 3 (Ablage).
 - Produces: `set_hotkey(mode_id: String, accelerator: String) -> Result<(), String>`;
   `HotkeyMap` bildet `Shortcut` auf `String` (Modus-ID) ab;
   `clear_hotkey(mode_id: String) -> Result<(), String>`.
@@ -348,7 +348,7 @@ git commit -m "Windows: Tastenkuerzel haengen an Modi statt an festen Workflows"
 
 ---
 
-### Aufgabe 5: Modusverwaltung in der Oberflaeche
+### Task 5: Modusverwaltung in der Oberflaeche
 
 **Files:**
 - Create: `BlitztextWin/src/mode-editor.ts`
@@ -356,7 +356,7 @@ git commit -m "Windows: Tastenkuerzel haengen an Modi statt an festen Workflows"
 - Create: `BlitztextWin/src/mode-editor.test.ts`
 
 **Interfaces:**
-- Consumes: Aufgaben 2, 3, 4.
+- Consumes: Tasks 2, 3, 4.
 - Produces: `renderModeList(container: HTMLElement, settings: Settings, on: ModeEvents): void`
   mit `ModeEvents = { add(mode: CustomMode): void; update(mode: CustomMode): void; remove(id: string): void }`.
 
@@ -392,7 +392,7 @@ git commit -m "Windows: Modi anlegen, bearbeiten und loeschen"
 
 ---
 
-### Aufgabe 6: Aufnahme laeuft ueber den gewaehlten Modus
+### Task 6: Aufnahme laeuft ueber den gewaehlten Modus
 
 **Files:**
 - Modify: `BlitztextWin/src/popover.ts` (Menueansicht, Aufnahmeablauf)
@@ -400,7 +400,7 @@ git commit -m "Windows: Modi anlegen, bearbeiten und loeschen"
 - Create: `BlitztextWin/src/run-mode.test.ts`
 
 **Interfaces:**
-- Consumes: Aufgaben 2, 3.
+- Consumes: Tasks 2, 3.
 - Produces: `runMode(mode: CustomMode, transcript: string, deps: RunDeps): Promise<string>`
   mit `RunDeps = { chat(system: string, user: string): Promise<string> }`.
 
@@ -440,7 +440,7 @@ git commit -m "Windows: Aufnahme laeuft ueber den gewaehlten Modus"
 
 ---
 
-### Aufgabe 7: Uebernahme der Altdaten
+### Task 7: Uebernahme der Altdaten
 
 **Files:**
 - Create: `BlitztextWin/src/migrate.ts`
@@ -448,7 +448,7 @@ git commit -m "Windows: Aufnahme laeuft ueber den gewaehlten Modus"
 - Modify: `BlitztextWin/src/settings-store.ts` (`loadSettings` ruft die Uebernahme)
 
 **Interfaces:**
-- Consumes: Aufgaben 2, 3.
+- Consumes: Tasks 2, 3.
 - Produces: `migrateLegacySettings(raw: unknown): Settings | null`
   (`null`, wenn nichts zu uebernehmen ist)
 
