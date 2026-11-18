@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultSettings, type Settings } from "./config";
 import { newMode } from "./modes";
-import { reconcileDuplicateHotkeys, removeCustomModeOrphans, seedCustomModesIfNeeded } from "./seed";
+import { registerAllHotkeys, removeCustomModeOrphans, seedCustomModesIfNeeded } from "./seed";
 
 function defaults(): Settings {
   return structuredClone(defaultSettings);
@@ -67,22 +67,45 @@ describe("Verwaiste Kuerzel", () => {
   });
 });
 
-describe("Doppelte Kuerzel", () => {
-  it("das zuletzt registrierte gewinnt, der andere bekommt leer", () => {
+describe("Kuerzel beim Start anmelden", () => {
+  const IDS = ["transcribe", "improve", "dampf", "emoji"];
+
+  it("bei gleichem Kuerzel gewinnt der zuletzt angemeldete, beide werden angemeldet", async () => {
     const s = defaults();
     s.hotkeys.transcribe = "Super+Shift+KeyX";
     s.hotkeys.improve = "Super+Shift+KeyX";
-    const geaendert = reconcileDuplicateHotkeys(s, [
-      ["transcribe", "Super+Shift+KeyX"],
-      ["improve", "Super+Shift+KeyX"],
-    ]);
+    const aufrufe: string[] = [];
+    const geaendert = await registerAllHotkeys(s, IDS, async (id) => {
+      aufrufe.push(id);
+    });
     expect(geaendert).toBe(true);
+    expect(aufrufe).toEqual(["transcribe", "improve", "dampf", "emoji"]);
     expect(s.hotkeys.improve).toBe("Super+Shift+KeyX");
     expect(s.hotkeys.transcribe).toBe("");
   });
 
-  it("meldet keine Aenderung ohne Doppelung", () => {
+  it("scheitert der zweite Halter, behaelt der erste sein Kuerzel", async () => {
     const s = defaults();
-    expect(reconcileDuplicateHotkeys(s, Object.entries(s.hotkeys))).toBe(false);
+    s.hotkeys.transcribe = "Super+Shift+KeyX";
+    s.hotkeys.improve = "Super+Shift+KeyX";
+    const geaendert = await registerAllHotkeys(s, IDS, async (id) => {
+      if (id === "improve") throw new Error("belegt");
+    });
+    // Der erste Halter hat die Kombination angemeldet und behaelt sie; der
+    // zweite verliert sie schon mit dessen Anmeldung, sein Fehlschlag aendert nichts mehr.
+    expect(geaendert).toBe(true);
+    expect(s.hotkeys.transcribe).toBe("Super+Shift+KeyX");
+    expect(s.hotkeys.improve).toBe("");
+  });
+
+  it("leere Eintraege werden nicht angemeldet", async () => {
+    const s = defaults();
+    s.hotkeys.dampf = "";
+    const aufrufe: string[] = [];
+    const geaendert = await registerAllHotkeys(s, IDS, async (id) => {
+      aufrufe.push(id);
+    });
+    expect(geaendert).toBe(false);
+    expect(aufrufe).toEqual(["transcribe", "improve", "emoji"]);
   });
 });

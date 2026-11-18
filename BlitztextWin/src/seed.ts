@@ -38,15 +38,27 @@ export function removeCustomModeOrphans(settings: Settings): boolean {
   return changed;
 }
 
-// Wendet erfolgreich angemeldete Kuerzel in Anmeldereihenfolge an: das zuletzt
-// angemeldete gewinnt, die anderen mit derselben Kombination werden leer.
-// Wahr, wenn dabei ein Kuerzel verloren ging.
-export function reconcileDuplicateHotkeys(
+// Meldet alle gespeicherten Kuerzel in der Reihenfolge von `ids` an. Die
+// Kuerzel werden vorab als Momentaufnahme gelesen, sonst wuerde das Leeren eines
+// frueheren Halters dessen spaeteren Durchlauf ueberspringen. Nach jeder
+// erfolgreichen Anmeldung gibt `assignHotkey` den anderen Haltern derselben
+// Kombination ein leeres Kuerzel: das zuletzt angemeldete gewinnt. Leere
+// Eintraege werden uebersprungen, ein gescheiterter Aufruf aendert nichts.
+// Wahr, wenn sich `settings.hotkeys` geaendert hat und gespeichert werden muss.
+export async function registerAllHotkeys(
   settings: Settings,
-  registered: Array<[string, string]>,
-): boolean {
+  ids: string[],
+  setHotkey: (id: string, accelerator: string) => Promise<void>,
+): Promise<boolean> {
+  const snapshot = ids.map((id): [string, string] => [id, settings.hotkeys[id]]);
   let changed = false;
-  for (const [id, accelerator] of registered) {
+  for (const [id, accelerator] of snapshot) {
+    if (!accelerator) continue;
+    try {
+      await setHotkey(id, accelerator);
+    } catch {
+      continue; // ungueltige Kombination zeigt sich erst beim Bearbeiten
+    }
     if (assignHotkey(settings, id, accelerator).length > 0) changed = true;
   }
   return changed;

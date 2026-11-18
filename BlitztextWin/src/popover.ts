@@ -27,7 +27,7 @@ import {
 } from "./mode-editor";
 import { iconFor } from "./mode-icons";
 import { hasInstruction } from "./modes";
-import { reconcileDuplicateHotkeys, removeCustomModeOrphans, seedCustomModesIfNeeded } from "./seed";
+import { registerAllHotkeys, removeCustomModeOrphans, seedCustomModesIfNeeded } from "./seed";
 import { deliveryFor, resolveModeId, rewriteOrKeep, runMode, type ModeTarget, type RunResult } from "./run-mode";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -980,17 +980,14 @@ window.addEventListener("DOMContentLoaded", async () => {
   // die eigenen Modi. Verwaiste Eintraege sind oben schon entfernt.
   renderRows();
   const ids = [...WORKFLOW_ORDER, ...settings.modes.map((m) => m.id)];
-  for (const id of ids) {
-    const accelerator = settings.hotkeys[id];
-    if (!accelerator) continue;
-    try {
-      await invoke("set_hotkey", { modeId: id, accelerator });
-      // Doppelte Kuerzel aus alten Dateien: das zuletzt angemeldete gewinnt, wie
-      // im Kern, der die frueheren Besitzer abmeldet.
-      if (reconcileDuplicateHotkeys(settings, [[id, accelerator]])) startChanged = true;
-    } catch {
-      /* invalid combo surfaced when the user edits it */
-    }
+  const hotkeysChanged = await registerAllHotkeys(settings, ids, (modeId, accelerator) =>
+    invoke("set_hotkey", { modeId, accelerator }),
+  );
+  if (hotkeysChanged) {
+    // Ein verlorenes Doppel-Kuerzel gleich in Zeilen und Modusliste zeigen.
+    startChanged = true;
+    renderRows();
+    renderModes();
   }
   if (startChanged) persist();
 });
