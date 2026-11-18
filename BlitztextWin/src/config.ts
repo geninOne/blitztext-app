@@ -32,8 +32,9 @@ export interface Settings {
   // Ein leerer Eintrag ("") heisst "bewusst kein Kuerzel". Bei den eingebauten
   // Schluesseln darf er nie geloescht werden, sonst legt der Lader beim naechsten
   // Start das Standardkuerzel wieder darunter.
-  // Der Schluessel ist die Modus-ID; die vier alten Workflow-Namen bleiben
-  // vorerst als Eintraege stehen, bis die Uebernahme sie in Modi umwandelt.
+  // Der Schluessel ist die Modus-Kennung: einer der vier eingebauten Namen
+  // (transcribe, improve, dampf, emoji) oder "custom-..." eines eigenen Modus.
+  // Die eingebauten Modi bleiben eingebaut und behalten ihre Eintraege.
   hotkeys: Record<string, string>;
   // Eigene Modi, wie auf dem Mac frei anlegbar.
   modes: CustomMode[];

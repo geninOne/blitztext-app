@@ -413,10 +413,6 @@ fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
 
 // --- Paste into the active app ---------------------------------------------
 
-/// Puts `text` on the clipboard and simulates the paste shortcut so it lands in
-/// whatever app currently has focus (our window stays hidden in the tray).
-/// macOS needs Accessibility permission for the synthetic keystroke; Windows
-/// needs no prompt.
 /// Legt Text nur in die Zwischenablage, ohne Tastendruck. Fuer einen
 /// gescheiterten Modellschritt: das Gesagte bleibt erhalten, landet aber nicht
 /// im Feld (wie keepTranscript auf dem Mac).
@@ -427,6 +423,10 @@ fn copy_text(text: String) -> Result<(), String> {
         .map_err(|e| format!("Zwischenablage: {e}"))
 }
 
+/// Puts `text` on the clipboard and simulates the paste shortcut so it lands in
+/// whatever app currently has focus (our window stays hidden in the tray).
+/// macOS needs Accessibility permission for the synthetic keystroke; Windows
+/// needs no prompt.
 #[tauri::command]
 fn paste_text(text: String) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
@@ -467,6 +467,13 @@ fn paste_text(text: String) -> Result<(), String> {
 /// mode's previous combo and any combo another mode already holds, so
 /// bindings can never collide or leak. If registering the new combo fails,
 /// the freed ones are registered again and the map stays untouched.
+///
+/// Muss ein synchrones Kommando bleiben (kein `async`): die Sperre der
+/// Kuerzel-Map wird ueber die Aufrufe an das Global-Shortcut-Plugin gehalten.
+/// Synchron laeuft das auf dem Hauptthread. Als `async` liefe es auf einem
+/// anderen Thread; das Plugin reicht die Anmeldung dann an den Hauptthread
+/// weiter und wartet, waehrend dort der Kuerzel-Handler (siehe `run`) auf
+/// dieselbe Sperre wartet. Das kann verklemmen.
 #[tauri::command]
 fn set_hotkey(
     app: tauri::AppHandle,
@@ -502,6 +509,9 @@ fn set_hotkey(
 
 /// Gibt das Kuerzel eines Modus frei, zum Beispiel wenn der Modus geloescht
 /// wird. Hat der Modus keins, passiert nichts.
+///
+/// Wie `set_hotkey` bewusst synchron: die Sperre der Map wird ueber den Aufruf
+/// an das Plugin gehalten, ein `async` koennte verklemmen.
 #[tauri::command]
 fn clear_hotkey(
     app: tauri::AppHandle,
