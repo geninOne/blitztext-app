@@ -40,19 +40,32 @@ export function modeFromTemplate(template: ModeTemplate): CustomMode {
   return newMode(template.name, template.icon, template.prompt);
 }
 
+// Sprache der Anweisungen, wie PromptLanguage auf dem Mac.
+export type PromptLanguage = "de" | "en";
+
+// Setzt einen Wert fuer einen Platzhalter ein. Die Funktion als Ersatz sorgt
+// dafuer, dass "$&" oder "$1" im Nutzertext woertlich bleiben.
+function fill(template: string, placeholder: string, value: string): string {
+  return template.replace(placeholder, () => value);
+}
+
 // Wie CustomModeWorkflow auf dem Mac: Anweisung, geschuetzte Eigennamen,
-// Kontext aus dem Textfeld, jeweils nur wenn gefuellt.
-export function systemPromptForMode(mode: CustomMode, terms: string[], context: string): string | null {
+// Kontext aus dem Textfeld, jeweils nur wenn gefuellt. Die Rahmentexte stehen
+// in shared/prompts.json (modeFrames), zeichengenau aus ModePrompts.swift.
+export function systemPromptForMode(
+  mode: CustomMode,
+  terms: string[],
+  context: string,
+  language: PromptLanguage = "de",
+): string | null {
   if (!hasInstruction(mode)) return null;
+  const frames = promptData.modeFrames;
   let prompt = mode.prompt;
   if (terms.length > 0) {
-    prompt += `\n\nWichtig: Diese Eigennamen und Fachbegriffe müssen exakt so geschrieben werden: ${terms.join(", ")}`;
+    prompt += fill(frames.customTerms[language], "{{terms}}", terms.join(", "));
   }
   if (context.length > 0) {
-    prompt +=
-      "\n\nKontext aus dem Textfeld, zum Beispiel die Nachricht, auf die geantwortet wird:\n" +
-      `"""\n${context}\n"""\n` +
-      "Nutze den Kontext nur zum Verständnis. Übernimm ihn nicht in deine Antwort und gib nur den neuen Text zurück.";
+    prompt += fill(frames.fieldContext[language], "{{context}}", context);
   }
   return prompt;
 }

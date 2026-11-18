@@ -1,5 +1,6 @@
 mod hotkeys;
 mod settings;
+mod language;
 
 use settings::normalize_base;
 
@@ -189,6 +190,13 @@ async fn chat_complete(
         .as_str()
         .ok_or_else(|| "Antwort ohne content-Feld.".to_string())?;
     Ok(content.trim().to_string())
+}
+
+/// Sprache der Anweisungen fuer eigene Modi: "en" nur bei sicher erkanntem
+/// Englisch, sonst "de" (siehe language.rs).
+#[tauri::command]
+fn detect_language(text: String) -> String {
+    language::detect(&text).to_string()
 }
 
 // --- Native audio recording (cpal -> WAV) ----------------------------------
@@ -592,6 +600,7 @@ pub fn run() {
             gateway_test,
             transcribe,
             chat_complete,
+            detect_language,
             set_hotkey,
             clear_hotkey,
             paste_text,

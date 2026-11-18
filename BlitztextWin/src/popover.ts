@@ -25,6 +25,9 @@ import {
   updateMode,
   type ModeEvents,
 } from "./mode-editor";
+import { iconFor } from "./mode-icons";
+import { hasInstruction } from "./modes";
+import { resolveModeId, rewriteOrKeep, runMode, type ModeTarget, type RunResult } from "./run-mode";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -99,9 +102,10 @@ const WORKFLOW_ORDER: WorkflowType[] = ["transcribe", "improve", "dampf", "emoji
 
 // Session-only debug history (in memory, max 10 — WAVs are too big for
 // localStorage). Lets you replay the audio and check what was recognized.
+// label: Markenname des eingebauten Modus oder Name des eigenen Modus.
 type HistoryEntry = {
   time: string;
-  workflow: WorkflowType;
+  label: string;
   input: string;
   output: string;
   audioBase64: string;
@@ -152,25 +156,54 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   const list = el("workflow-list");
+  // Eine Menuezeile. Name, Untertitel und Kuerzel kommen ueber textContent,
+  // weil Modusnamen und Kuerzel aus der Einstellungsdatei stammen.
+  function menuRow(icon: Element, name: string, sub: string, id: string, target: ModeTarget): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "row";
+    const iconBox = document.createElement("div");
+    iconBox.className = "row-icon";
+    iconBox.append(icon);
+    const text = document.createElement("div");
+    text.className = "row-text";
+    const nameEl = document.createElement("div");
+    nameEl.className = "row-name";
+    nameEl.textContent = name;
+    const subEl = document.createElement("div");
+    subEl.className = "row-sub";
+    subEl.textContent = sub;
+    text.append(nameEl, subEl);
+    const badges = document.createElement("div");
+    badges.className = "badges";
+    for (const key of accelParts(settings.hotkeys[id])) {
+      const badge = document.createElement("span");
+      badge.className = "key";
+      badge.textContent = key;
+      badges.append(badge);
+    }
+    row.append(iconBox, text, badges);
+    row.addEventListener("click", () => void startFromRow(target));
+    return row;
+  }
+
+  // Erst die vier eingebauten Modi, darunter die eigenen, wie menuModes auf dem Mac.
   function renderRows(): void {
-    list.innerHTML = "";
+    list.replaceChildren();
     for (const workflow of WORKFLOW_ORDER) {
-      const badges = accelParts(settings.hotkeys[workflow])
-        .map((key) => `<span class="key">${key}</span>`)
-        .join("");
-      const row = document.createElement("div");
-      row.className = "row";
-      row.innerHTML = `
-        <div class="row-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[workflow]}</svg>
-        </div>
-        <div class="row-text">
-          <div class="row-name">${workflowBrandNames[workflow]}</div>
-          <div class="row-sub">${SUBTITLES[workflow]}</div>
-        </div>
-        <div class="badges">${badges}</div>`;
-      row.addEventListener("click", () => void startFromRow(workflow));
-      list.append(row);
+      // ICONS ist fest im Code, daher hier innerHTML.
+      const holder = document.createElement("div");
+      holder.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[workflow]}</svg>`;
+      list.append(
+        menuRow(holder.firstElementChild!, workflowBrandNames[workflow], SUBTITLES[workflow], workflow, {
+          kind: "builtIn",
+          workflow,
+        }),
+      );
+    }
+    for (const mode of settings.modes) {
+      // Untertitel wie AppState.menuSubtitle auf dem Mac.
+      const sub = hasInstruction(mode) ? "Dein Format, dein Prompt." : "Ohne Anweisung: wortgenau.";
+      list.append(menuRow(iconFor(mode.icon, 18), displayName(mode), sub, mode.id, { kind: "custom", mode }));
     }
   }
 
@@ -180,16 +213,67 @@ window.addEventListener("DOMContentLoaded", async () => {
   // returns the WAV as base64, which we transcribe -> optionally rewrite -> paste.
   let recording = false;
   let busy = false;
-  let currentWorkflow: WorkflowType = "transcribe";
+  // Der Modus haelt den Stand beim Start fest; eine Aenderung im Editor
+  // ersetzt das Objekt in settings.modes und trifft diese Aufnahme nicht.
+  let currentTarget: ModeTarget = { kind: "builtIn", workflow: "transcribe" };
 
-  async function startRecording(workflow: WorkflowType): Promise<void> {
+  // Kurzname fuer die Statuszeile.
+  function statusLabel(target: ModeTarget): string {
+    return target.kind === "builtIn" ? workflowLabels[target.workflow] : displayName(target.mode);
+  }
+
+  // Bezeichnung im Verlauf.
+  function historyLabel(target: ModeTarget): string {
+    return target.kind === "builtIn" ? workflowBrandNames[target.workflow] : displayName(target.mode);
+  }
+
+  function chatViaGateway(model: string, system: string, user: string): Promise<string> {
+    return invoke<string>("chat_complete", {
+      baseUrl: settings.liteLLM.baseURL.trim(),
+      model,
+      system,
+      user,
+    });
+  }
+
+  // Eingebaute Modi: Prompts unveraendert ueber systemPromptFor. Eigene Modi:
+  // runMode mit fastModel, Eigennamen aus "Eigennamen", Kontext noch leer.
+  // Beide behalten das Transkript, wenn der Modellschritt scheitert.
+  async function rewriteFor(target: ModeTarget, text: string): Promise<RunResult> {
+    const fastModel = settings.liteLLM.fastModel.trim() || defaultSettings.liteLLM.fastModel;
+    if (target.kind === "custom") {
+      if (hasInstruction(target.mode) && text) {
+        setStatus(`Verarbeite (${statusLabel(target)}) ...`, "busy");
+      }
+      return runMode(
+        target.mode,
+        text,
+        {
+          chat: (system, user) => chatViaGateway(fastModel, system, user),
+          language: async (transcript) =>
+            (await invoke<string>("detect_language", { text: transcript })) === "en" ? "en" : "de",
+        },
+        { terms: settings.improve.customTerms, context: "" },
+      );
+    }
+    const system = systemPromptFor(target.workflow, settings);
+    if (!system || !text) return { text, aiFailed: false };
+    const model =
+      target.workflow === "dampf"
+        ? settings.liteLLM.strongModel.trim() || defaultSettings.liteLLM.strongModel
+        : fastModel;
+    setStatus(`Verarbeite (${statusLabel(target)}) ...`, "busy");
+    return rewriteOrKeep(text, () => chatViaGateway(model, system, text));
+  }
+
+  async function startRecording(target: ModeTarget): Promise<void> {
     if (recording || busy) return;
-    currentWorkflow = workflow;
+    currentTarget = target;
     try {
       await invoke("record_start");
       recording = true;
       await invoke("set_recording", { active: true });
-      setStatus(`Aufnahme (${workflowLabels[workflow]}) ...`, "recording");
+      setStatus(`Aufnahme (${statusLabel(target)}) ...`, "recording");
     } catch (error) {
       setStatus(`Mikrofon-Fehler: ${error}`);
       await invoke("set_recording", { active: false });
@@ -212,26 +296,14 @@ window.addEventListener("DOMContentLoaded", async () => {
         contentType: "audio/wav",
       });
 
-      let result = text;
-      const system = systemPromptFor(currentWorkflow, settings);
-      if (system && text) {
-        const model =
-          currentWorkflow === "dampf"
-            ? settings.liteLLM.strongModel.trim() || defaultSettings.liteLLM.strongModel
-            : settings.liteLLM.fastModel.trim() || defaultSettings.liteLLM.fastModel;
-        setStatus(`Verarbeite (${workflowLabels[currentWorkflow]}) ...`, "busy");
-        result = await invoke<string>("chat_complete", {
-          baseUrl: settings.liteLLM.baseURL.trim(),
-          model,
-          system,
-          user: text,
-        });
-      }
+      const target = currentTarget;
+      const outcome = await rewriteFor(target, text);
+      const result = outcome.text;
 
       // Keep a session-only debug entry (newest first, capped at 10).
       history.unshift({
         time: new Date().toLocaleTimeString(),
-        workflow: currentWorkflow,
+        label: historyLabel(target),
         input: text,
         output: result,
         audioBase64,
@@ -240,7 +312,12 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (!el("tab-history").hidden) renderHistory();
 
       if (result) await invoke("paste_text", { text: result });
-      setStatus("Bereit");
+      // Gescheiterter Modellschritt: das Gesagte ist trotzdem eingefuegt.
+      setStatus(
+        outcome.aiFailed
+          ? `Modellschritt fehlgeschlagen, wortgenauer Text eingefügt. ${outcome.reason ?? ""}`.trim()
+          : "Bereit",
+      );
     } catch (error) {
       setStatus(`Fehler: ${error}`);
     } finally {
@@ -255,23 +332,23 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // Click a row: hide the popover (so focus + paste return to the active app),
   // then record in toggle mode. A tray click stops it (via "popover-stop").
-  async function startFromRow(workflow: WorkflowType): Promise<void> {
+  async function startFromRow(target: ModeTarget): Promise<void> {
     if (recording) {
       stopRecording();
       return;
     }
     await invoke("hide_popover");
-    await startRecording(workflow);
+    await startRecording(target);
   }
 
   // Hotkey handling honors the mode: "hold" = record while held (down starts,
   // up stops); "toggle" = press to start, press again (or Esc/tray) to stop.
   let lastHotkeyDown = 0;
+  // Die Kennung ist ein eingebauter Name oder "custom-..."; eine unbekannte
+  // (Modus geloescht) loest nichts aus.
   await listen<string>("hotkey-down", (event) => {
-    // Eigene Modi nehmen hier noch nicht auf; ihr Kuerzel ist registriert,
-    // loest aber bis dahin nichts aus.
-    if (event.payload && !(WORKFLOW_ORDER as string[]).includes(event.payload)) return;
-    const workflow = (event.payload as WorkflowType) || "transcribe";
+    const target = resolveModeId(event.payload ?? "", settings.modes);
+    if (!target) return;
     if (settings.hotkeyMode === "toggle") {
       // Ignore OS key auto-repeat so a held key doesn't flip start/stop.
       const now = performance.now();
@@ -279,13 +356,13 @@ window.addEventListener("DOMContentLoaded", async () => {
       lastHotkeyDown = now;
       if (isRepeat) return;
       if (recording) stopRecording();
-      else void startRecording(workflow);
+      else void startRecording(target);
     } else {
-      void startRecording(workflow); // hold: re-entry is ignored in startRecording
+      void startRecording(target); // hold: re-entry is ignored in startRecording
     }
   });
   await listen<string>("hotkey-up", (event) => {
-    if (event.payload && !(WORKFLOW_ORDER as string[]).includes(event.payload)) return;
+    if (!resolveModeId(event.payload ?? "", settings.modes)) return;
     if (settings.hotkeyMode === "hold") stopRecording();
   });
   await listen("popover-stop", () => stopRecording());
@@ -320,7 +397,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       const head = document.createElement("div");
       head.className = "hist-head";
       head.innerHTML = `<span class="wf"></span><span> · ${entry.time}</span>`;
-      head.querySelector(".wf")!.textContent = workflowBrandNames[entry.workflow];
+      head.querySelector(".wf")!.textContent = entry.label;
 
       const audio = document.createElement("audio");
       audio.controls = true;
@@ -851,10 +928,12 @@ window.addEventListener("DOMContentLoaded", async () => {
       addMode(settings, mode);
       persist();
       renderModes();
+      renderRows();
     },
     update(mode) {
       updateMode(settings, mode);
       persist();
+      renderRows(); // Name, Symbol und Untertitel im Menue
     },
     async remove(id) {
       if (capturing?.id === id) endCapture("");
@@ -866,6 +945,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       removeMode(settings, id);
       persist();
       renderModes();
+      renderRows();
     },
     hotkeyDisplay,
     hotkeyEditor(id) {

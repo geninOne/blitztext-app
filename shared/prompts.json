@@ -64,6 +64,17 @@
     }
   ],
 
+  "modeFrames": {
+    "customTerms": {
+      "de": "\n\nWichtig: Diese Eigennamen und Fachbegriffe müssen exakt so geschrieben werden: {{terms}}",
+      "en": "\n\nImportant: these names and terms must be spelled exactly like this: {{terms}}"
+    },
+    "fieldContext": {
+      "de": "\n\nKontext aus dem Textfeld, zum Beispiel die Nachricht, auf die geantwortet wird:\n\"\"\"\n{{context}}\n\"\"\"\nNutze den Kontext nur zum Verständnis. Übernimm ihn nicht in deine Antwort und gib nur den neuen Text zurück.",
+      "en": "\n\nContext from the text field, for example the message being replied to:\n\"\"\"\n{{context}}\n\"\"\"\nUse the context only for understanding. Do not copy it into your answer; return only the new text."
+    }
+  },
+
   "spokenTranscriptRules": {
     "de": "Der Nutzer schickt dir ein gesprochenes Transkript.\n- Korrigiert sich der Sprecher beim Sprechen, übernimm nur die korrigierte Fassung. Das gilt auch für weiche Korrekturen. Beispiele: „am Mittwoch, nein, Donnerstag“ wird zu „am Donnerstag“, „drei, äh, vier Leute“ zu „vier Leute“.\n- Behalte die Anrede wie gesprochen: „du“ bleibt „du“, „Sie“ bleibt „Sie“.\n- Antworte ausschließlich mit dem fertigen Text, ohne Vorbemerkung.",
     "en": "The user sends you a spoken transcript.\n- If the speaker corrects themselves while speaking, keep only the corrected version. This includes soft corrections. Examples: \"on Wednesday, no, Thursday\" becomes \"on Thursday\", \"three, uh, four people\" becomes \"four people\".\n- Keep the form of address as spoken.\n- Reply with the finished text only, without any preamble."
