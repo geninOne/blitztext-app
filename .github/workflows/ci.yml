@@ -5,8 +5,8 @@ name: CI
 # Dieser Workflow baut absichtlich nichts Auslieferbares: universal macOS
 # Binary, Windows Installer, Signaturen und Releases entstehen in den beiden
 # Release-Workflows, die nur noch auf main und auf Versions-Tags laufen.
-# Hier geht es allein um die Frage "kompiliert das und sind keine Secrets
-# eingecheckt", und zwar so schnell wie moeglich.
+# Hier geht es allein um die Frage "kompiliert das, laufen die Tests und sind
+# keine Secrets eingecheckt", und zwar so schnell wie moeglich.
 
 on:
   pull_request:
@@ -42,7 +42,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Secret hygiene scan
         run: |
@@ -68,15 +68,16 @@ jobs:
     # Der Name muss sich von den Release-Workflows unterscheiden, sonst gibt es
     # zwei Checks gleichen Namens und Required Checks werden unbrauchbar.
     name: macOS compile check
-    runs-on: macos-14
-    timeout-minutes: 30
+    # Die App braucht ein aktuelles Xcode (MLX, Sparkle, neue SwiftUI-APIs).
+    runs-on: macos-26
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode.app
+        run: sudo xcode-select -s /Applications/Xcode.app
 
       - name: Install XcodeGen
         env:
@@ -89,11 +90,30 @@ jobs:
             brew install xcodegen
           fi
 
+      # Sekundensache und ohne App-Build: spielt an einem Fake-Bundle durch,
+      # dass ein fehlgeschlagenes Signieren die vorhandene Installation nicht
+      # kaputt macht.
+      - name: Install-Block von build.sh
+        run: ./scripts/test-install-block.sh
+
       # --fast baut nur fuer die Architektur des Runners und ohne clean. Ob der
       # Code auch als universal Binary durchgeht, beantwortet der Release-Build
       # auf main; hier wuerde die zweite Architektur nur die Laufzeit verdoppeln.
       - name: Build (Debug, host arch)
         run: ./build.sh --debug --fast
+
+      - name: Unit tests
+        working-directory: BlitztextMac
+        run: |
+          xcodebuild \
+            -project BlitztextMac.xcodeproj \
+            -scheme BlitztextMac \
+            -destination 'platform=macOS,arch=arm64' \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test
 
   build-windows:
     name: Windows compile check
@@ -105,7 +125,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node
         uses: actions/setup-node@v4

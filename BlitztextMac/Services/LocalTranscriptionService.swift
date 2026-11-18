@@ -1,5 +1,8 @@
 import Foundation
+import OSLog
 import WhisperKit
+
+private let speechLogger = Logger(subsystem: "app.blitztext.mac", category: "Recording")
 
 struct LocalTranscriptionModel: Identifiable, Hashable {
     let id: String
@@ -16,30 +19,23 @@ struct LocalTranscriptionModel: Identifiable, Hashable {
         Self.displayName(for: id)
     }
 
-    var installStateLabel: String {
-        isInstalled ? "Installiert" : "Nicht installiert"
+    var isParakeet: Bool {
+        id == ParakeetTranscriber.modelName
     }
 
-    var shortDisplayName: String {
-        if id.contains("small") {
-            return "Whisper Small"
-        }
-        if id.contains("base") {
-            return "Whisper Base"
-        }
-        if id.contains("tiny") {
-            return "Whisper Tiny"
-        }
-        if id.contains("turbo") {
-            return "Whisper Turbo"
-        }
-        if id.contains("large-v3") {
-            return "Whisper Large"
-        }
-        return displayName
+    var rating: LocalModelRating? {
+        LocalModelRating.rating(for: id)
+    }
+
+    /// The same entry in the menu bar and in the settings.
+    var pickerLabel: String {
+        isInstalled ? displayName : "\(displayName) (nicht installiert)"
     }
 
     static func displayName(for modelName: String) -> String {
+        if modelName == ParakeetTranscriber.modelName {
+            return ParakeetTranscriber.displayName
+        }
         if modelName.contains("small") {
             return "Whisper Small"
         }
@@ -49,7 +45,8 @@ struct LocalTranscriptionModel: Identifiable, Hashable {
         if modelName.contains("tiny") {
             return "Whisper Tiny"
         }
-        if modelName.contains("turbo") {
+        // OpenAI's large-v3-turbo, released 2024-09-30; Argmax ships it in two builds.
+        if modelName.contains("large-v3-v20240930") {
             return "Whisper Large v3 Turbo"
         }
         if modelName.contains("large-v3") {
@@ -62,10 +59,59 @@ struct LocalTranscriptionModel: Identifiable, Hashable {
     }
 }
 
-enum LocalTranscriptionError: LocalizedError {
+/// Relative speed and accuracy (0...1) to compare local models at a glance, derived from
+/// published benchmarks (October 2026), not measured by Blitztext.
+///
+/// Accuracy: `1 - WER / 25` with the German FLEURS word error rate, so 25 % WER is an empty
+/// bar. Parakeet Ultra 4.9 % and v3 5.8 % (Blitztext's run of FluidAudio's FLEURS benchmark,
+/// 350 German samples on Apple M5; FluidAudio publishes 5.9 % for v3); Whisper
+/// large-v3-turbo 5.8 % (OpenAI, whisper discussion #2363) plus about 1 point for the
+/// 4-bit compression (Argmax, German Common Voice 17: 12.26 % to 13.21 %); Whisper small
+/// 10.2 % (Whisper paper, table 13; no figure for the compressed file).
+///
+/// Speed: `log10(x) / log10(200)` with x times real time on an M4 Pro, so 1x is an empty
+/// bar and 200x a full one. Parakeet v3 155.6x (FluidAudio, LibriSpeech test-clean), Ultra
+/// about 11 % slower in the same run as above, so about 140x; WhisperKit
+/// 27.3x small, 15.8x turbo_632MB, 10.5x 626MB (Argmax whisperkit-benchmarks). Logarithmic,
+/// because a dictation of a few seconds feels instant at 100x and still quick at 10x.
+///
+/// Both Whisper large entries are OpenAI's large-v3-turbo (v20240930) with the same 4-bit
+/// weights; the `_turbo` file adds Argmax's streaming optimizations and runs about 1.5x faster.
+struct LocalModelRating: Equatable {
+    let speed: Double
+    let accuracy: Double
+    let sizeLabel: String
+    /// Which languages the model handles; all of them detect the language themselves.
+    var languages = "Erkennt die Sprache selbst, rund 100 Sprachen."
+
+    static func rating(for modelName: String) -> LocalModelRating? {
+        if modelName == ParakeetTranscriber.modelName {
+            let legacy = ParakeetTranscriber.usesLegacyModel
+            return LocalModelRating(
+                speed: legacy ? 0.95 : 0.93,
+                accuracy: legacy ? 0.77 : 0.80,
+                sizeLabel: legacy ? "~460 MB" : "~630 MB",
+                languages: "Erkennt die Sprache selbst: Deutsch, Englisch und 23 weitere europäische Sprachen."
+            )
+        }
+        if modelName.contains("large-v3-v20240930_turbo") {
+            return LocalModelRating(speed: 0.52, accuracy: 0.73, sizeLabel: "632 MB")
+        }
+        if modelName.contains("large-v3-v20240930") {
+            return LocalModelRating(speed: 0.44, accuracy: 0.73, sizeLabel: "626 MB")
+        }
+        if modelName.contains("small") {
+            return LocalModelRating(speed: 0.62, accuracy: 0.59, sizeLabel: "216 MB")
+        }
+        return nil
+    }
+}
+
+enum LocalTranscriptionError: LocalizedError, NoSpeechVerdict {
     case modelMissing(URL)
     case downloadedModelInvalid(String)
     case noText
+    case noSpeech
 
     var errorDescription: String? {
         switch self {
@@ -74,8 +120,21 @@ enum LocalTranscriptionError: LocalizedError {
         case .downloadedModelInvalid(let modelName):
             return "Das geladene Modell ist unvollständig: \(modelName)"
         case .noText:
-            return "Das lokale Modell hat keinen Text erkannt."
+            return Self.withQuietMicrophoneHint("Das lokale Modell hat keinen Text erkannt.")
+        case .noSpeech:
+            return Self.withQuietMicrophoneHint("In der Aufnahme war keine Sprache zu hören.")
         }
+    }
+
+    /// Adds the likely reason when macOS records very quietly.
+    private static func withQuietMicrophoneHint(_ message: String) -> String {
+        guard case .quiet(let percent) = MicrophoneCheck.issue else { return message }
+        return message.appendingSentence("Das Mikrofon ist sehr leise eingestellt (\(percent) %), im Menü lässt es sich lauter stellen.")
+    }
+
+    var meansNoSpeech: Bool {
+        if case .noSpeech = self { return true }
+        return false
     }
 }
 
@@ -85,12 +144,55 @@ actor LocalTranscriptionService {
     static let defaultModelName = "openai_whisper-large-v3-v20240930_626MB"
     static let fastModelName = "openai_whisper-large-v3-v20240930_turbo_632MB"
     static let recommendedFastModelName = "openai_whisper-small_216MB"
+    /// What a new Mac starts with: Parakeet Ultra, faster and more accurate than Whisper.
+    static var initialModelName: String {
+        ParakeetTranscriber.modelName
+    }
+
+    /// WhisperKit writes past the end of a buffer on Intel Macs and crashes the app (public
+    /// issue #30), so Intel Macs only get Parakeet.
+    static var whisperIsSupported: Bool {
+        #if arch(arm64)
+        return true
+        #else
+        return false
+        #endif
+    }
     static let modelRepo = "argmaxinc/whisperkit-coreml"
-    static let supportedModelNames = [
-        recommendedFastModelName,
-        fastModelName,
-        defaultModelName
-    ]
+    /// Both builds of Whisper large-v3-turbo carry the same 4-bit weights, so the app lists
+    /// them as one model. The streaming build runs about 1.5x faster, but Argmax does not
+    /// support it on M1, so M1 and Intel Macs get the plain build.
+    static let turboModelNames = [fastModelName, defaultModelName]
+
+    static var preferredTurboModelName: String {
+        hasFastTurboSupport ? fastModelName : defaultModelName
+    }
+
+    private static let hasFastTurboSupport: Bool = {
+        var size = 0
+        guard sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 0 else { return false }
+        var bytes = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 else { return false }
+        let brand = String(cString: bytes)
+        return brand.hasPrefix("Apple M") && !brand.hasPrefix("Apple M1")
+    }()
+
+    /// The one turbo entry: the build already selected and on disk, else a downloaded one,
+    /// else the build for this Mac.
+    static func turboModelName(selected: String) -> String {
+        if turboModelNames.contains(selected), isModelInstalled(selected) {
+            return selected
+        }
+        if isModelInstalled(preferredTurboModelName) {
+            return preferredTurboModelName
+        }
+        return turboModelNames.first(where: { isModelInstalled($0) }) ?? preferredTurboModelName
+    }
+
+    static func supportedModelNames(selected: String) -> [String] {
+        guard whisperIsSupported else { return [ParakeetTranscriber.modelName] }
+        return [ParakeetTranscriber.modelName, recommendedFastModelName, turboModelName(selected: selected)]
+    }
     static let modelPageURL = URL(
         string: "https://huggingface.co/argmaxinc/whisperkit-coreml/tree/main/openai_whisper-large-v3-v20240930_626MB"
     )!
@@ -103,6 +205,8 @@ actor LocalTranscriptionService {
 
     static func modelPageURL(for modelName: String) -> URL {
         switch normalizedModelName(modelName) {
+        case ParakeetTranscriber.modelName:
+            return ParakeetTranscriber.modelPageURL
         case recommendedFastModelName:
             return recommendedFastModelPageURL
         case fastModelName:
@@ -115,6 +219,8 @@ actor LocalTranscriptionService {
     }
 
     private var whisperKit: WhisperKit?
+    private var pipelineTask: Task<WhisperKit, Error>?
+    private var pipelineTaskModelName: String?
     private var loadedModelName: String?
 
     static var isModelInstalled: Bool {
@@ -122,27 +228,38 @@ actor LocalTranscriptionService {
     }
 
     static func modelURL(named modelName: String) -> URL {
-        AppSupportPaths.whisperKitModelsDirectoryURL.appendingPathComponent(normalizedModelName(modelName), isDirectory: true)
+        if normalizedModelName(modelName) == ParakeetTranscriber.modelName {
+            return ParakeetTranscriber.modelsDirectoryURL
+        }
+        return AppSupportPaths.whisperKitModelsDirectoryURL.appendingPathComponent(normalizedModelName(modelName), isDirectory: true)
     }
 
     static func isModelInstalled(_ modelName: String) -> Bool {
-        isUsableModel(at: modelURL(named: modelName))
+        if normalizedModelName(modelName) == ParakeetTranscriber.modelName {
+            return ParakeetTranscriber.isInstalled
+        }
+        return isUsableModel(at: modelURL(named: modelName))
     }
 
     static func normalizedModelName(_ modelName: String) -> String {
         let trimmed = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? recommendedFastModelName : trimmed
+        return trimmed.isEmpty ? initialModelName : trimmed
     }
 
     static func installedModels() -> [LocalTranscriptionModel] {
         let directory = AppSupportPaths.whisperKitModelsDirectoryURL
-        let urls = (try? FileManager.default.contentsOfDirectory(
+        // A Whisper download from an earlier version is never used on Intel, not even as fallback.
+        let urls = whisperIsSupported ? (try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        )) ?? []
+        )) ?? [] : []
 
-        return urls
+        let parakeet = ParakeetTranscriber.isInstalled
+            ? [LocalTranscriptionModel(id: ParakeetTranscriber.modelName, url: ParakeetTranscriber.modelsDirectoryURL)]
+            : []
+
+        return parakeet + urls
             .filter { isUsableModel(at: $0) }
             .map { LocalTranscriptionModel(id: $0.lastPathComponent, url: $0) }
             .sorted { lhs, rhs in
@@ -156,11 +273,12 @@ actor LocalTranscriptionService {
             }
     }
 
-    static func modelOptions() -> [LocalTranscriptionModel] {
+    static func modelOptions(selected: String) -> [LocalTranscriptionModel] {
         var seen = Set<String>()
         let installed = installedModels()
         let installedByID = Dictionary(uniqueKeysWithValues: installed.map { ($0.id, $0) })
-        let orderedIDs = supportedModelNames + installed.map(\.id)
+        let orderedIDs = supportedModelNames(selected: normalizedModelName(selected))
+            + installed.map(\.id).filter { !turboModelNames.contains($0) }
 
         return orderedIDs.compactMap { modelName in
             let normalizedName = normalizedModelName(modelName)
@@ -196,6 +314,10 @@ actor LocalTranscriptionService {
     }
 
     func prepare(modelName: String) async throws {
+        if Self.resolvedModelName(modelName) == ParakeetTranscriber.modelName {
+            try await ParakeetTranscriber.shared.prepare()
+            return
+        }
         _ = try await pipeline(modelName: modelName)
     }
 
@@ -204,6 +326,13 @@ actor LocalTranscriptionService {
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
         let normalizedName = Self.normalizedModelName(modelName)
+        if normalizedName == ParakeetTranscriber.modelName {
+            try await ParakeetTranscriber.shared.download(progressHandler: progressHandler)
+            guard ParakeetTranscriber.isInstalled else {
+                throw LocalTranscriptionError.downloadedModelInvalid(normalizedName)
+            }
+            return ParakeetTranscriber.modelsDirectoryURL
+        }
         let destinationURL = Self.modelURL(named: normalizedName)
 
         if Self.isUsableModel(at: destinationURL) {
@@ -255,34 +384,86 @@ actor LocalTranscriptionService {
         }
     }
 
-    func transcribe(audioURL: URL, language: String, modelName: String) async throws -> String {
+    /// - Parameter requireSpeech: On for live dictations only. Audio files, including a kept
+    ///   recording (`UnfinishedRecordings`), always reach the model.
+    /// - Parameter language: The language setting. A code such as "de" goes to Parakeet as a
+    ///   hint; `TranscriptionSettings.automaticLanguage` sends none, and the model decides per
+    ///   dictation.
+    func transcribe(audioURL: URL, language: String, modelName: String, requireSpeech: Bool = true) async throws -> String {
+        // Every model invents text on a recording without speech, so none of them runs on an
+        // accidental shortcut. Longer dictations always reach the model, as on iOS: they may
+        // just be quiet (a low input volume, a whisper).
+        if requireSpeech, HallucinationFilter.isAccidentalRecording(audioURL) {
+            speechLogger.info("No speech in a dictation under 3 s, no model run")
+            throw LocalTranscriptionError.noSpeech
+        }
         let resolvedLanguage = language.trimmingCharacters(in: .whitespacesAndNewlines)
-        let decodeOptions = DecodingOptions(
-            task: .transcribe,
-            language: resolvedLanguage.isEmpty ? nil : resolvedLanguage
-        )
+        let padded = AudioPadding.paddedCopy(of: audioURL)
+        defer { if let padded { try? FileManager.default.removeItem(at: padded) } }
+        let audioURL = padded ?? audioURL
 
-        let pipeline = try await pipeline(modelName: modelName)
-        let results = try await pipeline.transcribe(
-            audioPath: audioURL.path,
-            decodeOptions: decodeOptions
-        )
-        let text = results
-            .map(\.text)
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text: String
+        if Self.resolvedModelName(modelName) == ParakeetTranscriber.modelName {
+            let raw = try await ParakeetTranscriber.shared.transcribe(audioURL: audioURL, language: resolvedLanguage)
+            text = HallucinationFilter.removingTrailingCredits(raw)
+        } else {
+            let pipeline = try await pipeline(modelName: modelName)
+            switch try await WhisperDictation.run(pipeline, audioPath: audioURL.path) {
+            case .text(let whisperText):
+                text = whisperText
+            case .inventedOnSilence:
+                // A cough or click that passed the speech check: no speech, so a short
+                // recording goes instead of being kept as "Aufnahme ohne Text".
+                throw LocalTranscriptionError.noSpeech
+            }
+        }
 
         guard !text.isEmpty else {
             throw LocalTranscriptionError.noText
         }
-
         return text
     }
+
+    /// True once the model is loaded and compiled for this Mac, so a transcription
+    /// starts right away.
+    func isReady(modelName: String) async -> Bool {
+        let resolvedModelName = Self.resolvedModelName(modelName)
+        if resolvedModelName == ParakeetTranscriber.modelName {
+            return await ParakeetTranscriber.shared.isReady
+        }
+        return whisperKit != nil && loadedModelName == resolvedModelName
+    }
+
+    /// Transcribes and calls `onSlowPreparation` once if the model is still not ready
+    /// after `delay`. After a macOS update Core ML recompiles every model for the
+    /// Neural Engine, which can take minutes; without a hint the app looks stuck.
+    static func transcribe(
+        audioURL: URL,
+        language: String,
+        modelName: String,
+        slowPreparationAfter delay: Duration = .seconds(8),
+        requireSpeech: Bool = true,
+        onSlowPreparation: @escaping @MainActor () -> Void
+    ) async throws -> String {
+        let watcher = Task {
+            try await Task.sleep(for: delay)
+            if await !shared.isReady(modelName: modelName) {
+                await onSlowPreparation()
+            }
+        }
+        defer { watcher.cancel() }
+        return try await shared.transcribe(audioURL: audioURL, language: language, modelName: modelName, requireSpeech: requireSpeech)
+    }
+
+    static let slowPreparationMessage = "Spracherkennung wird vorbereitet. Nach einem macOS-Update dauert das einmalig einige Minuten, bitte Blitztext nicht beenden."
 
     private func pipeline(modelName: String) async throws -> WhisperKit {
         let resolvedModelName = Self.resolvedModelName(modelName)
         if let whisperKit, loadedModelName == resolvedModelName {
             return whisperKit
+        }
+        if let pipelineTask, pipelineTaskModelName == resolvedModelName {
+            return try await pipelineTask.value
         }
 
         let url = Self.modelURL(named: resolvedModelName)
@@ -290,13 +471,31 @@ actor LocalTranscriptionService {
             throw LocalTranscriptionError.modelMissing(url)
         }
 
-        let loaded = try await WhisperKit(
-            modelFolder: url.path,
-            verbose: false,
-            prewarm: true,
-            load: true,
-            download: false
+        try FileManager.default.createDirectory(
+            at: AppSupportPaths.whisperKitTokenizersDirectoryURL,
+            withIntermediateDirectories: true
         )
+        // Reentrancy guard: a second dictation during a slow load waits for this one
+        // instead of starting another full load and compile.
+        let task = Task<WhisperKit, Error> {
+            try await WhisperKit(
+                modelFolder: url.path,
+                tokenizerFolder: AppSupportPaths.whisperKitTokenizersDirectoryURL,
+                verbose: false,
+                prewarm: true,
+                load: true,
+                download: false
+            )
+        }
+        pipelineTask = task
+        pipelineTaskModelName = resolvedModelName
+        defer {
+            if pipelineTaskModelName == resolvedModelName {
+                pipelineTask = nil
+                pipelineTaskModelName = nil
+            }
+        }
+        let loaded = try await task.value
         whisperKit = loaded
         loadedModelName = resolvedModelName
         return loaded

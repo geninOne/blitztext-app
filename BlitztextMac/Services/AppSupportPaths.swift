@@ -13,12 +13,22 @@ enum AppSupportPaths {
         appSupportDirectoryURL.appendingPathComponent("settings.json")
     }
 
-    static var dictationQueueURL: URL {
-        appSupportDirectoryURL.appendingPathComponent("dictation-queue.json")
+    static var credentialsURL: URL {
+        appSupportDirectoryURL.appendingPathComponent(".credentials")
     }
 
-    static var updatesDirectoryURL: URL {
-        appSupportDirectoryURL.appendingPathComponent("updates", isDirectory: true)
+    /// Own modes, besides settings.json (`CustomModeFile`).
+    static var customModesURL: URL {
+        appSupportDirectoryURL.appendingPathComponent("custom-modes.json")
+    }
+
+    static var historyURL: URL {
+        appSupportDirectoryURL.appendingPathComponent(".history")
+    }
+
+    /// History recorded while `.history` did not open without the Keychain key (`SealedStoreFiles`).
+    static var historyPendingURL: URL {
+        appSupportDirectoryURL.appendingPathComponent(".history-pending")
     }
 
     static var localModelsDirectoryURL: URL {
@@ -27,6 +37,13 @@ enum AppSupportPaths {
 
     static var whisperKitModelsDirectoryURL: URL {
         localModelsDirectoryURL.appendingPathComponent("whisperkit", isDirectory: true)
+    }
+
+    /// Tokenizers for WhisperKit. Without an explicit folder WhisperKit falls back to
+    /// ~/Documents/huggingface, which needs Documents access and breaks when that
+    /// folder is protected or synced.
+    static var whisperKitTokenizersDirectoryURL: URL {
+        localModelsDirectoryURL.appendingPathComponent("tokenizers", isDirectory: true)
     }
 
     static var defaultWhisperKitModelURL: URL {

@@ -20,6 +20,7 @@ on:
     types: [opened, synchronize, reopened, labeled]
     paths:
       - 'BlitztextMac/**'
+      - 'BlitztextShared/**'
       - 'build.sh'
       - 'shared/**'
       - '.github/workflows/macos-release.yml'
@@ -38,7 +39,8 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       contains(github.event.pull_request.labels.*.name, 'build-artifacts')
-    runs-on: macos-latest
+    # Die App braucht ein aktuelles Xcode (MLX, Sparkle, neue SwiftUI-APIs).
+    runs-on: macos-26
     permissions:
       contents: write   # required to publish a Release on tag pushes
     steps:
@@ -50,7 +52,7 @@ jobs:
 
       - name: Verify versions match the tag
         if: startsWith(github.ref, 'refs/tags/v')
-        run: bash Scripts/check-release-version.sh "$GITHUB_REF_NAME"
+        run: bash scripts/check-release-version.sh "$GITHUB_REF_NAME"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -63,27 +65,56 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent Blitztext.app Blitztext-macos-universal.zip
           ls -lh Blitztext-macos-universal.zip
 
-      - name: Sign update archive
-        if: github.event_name != 'pull_request'
+      # Sparkle-Appcast. Nur auf einem Versionstag: der Feed der App zeigt auf
+      # releases/latest/download/appcast.xml, und "latest" ist bei GitHub immer
+      # ein richtiges Release, nie ein Prerelease von main.
+      - name: Create signed appcast (Sparkle)
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
-          BLITZTEXT_UPDATE_PRIVATE_KEY: ${{ secrets.BLITZTEXT_UPDATE_PRIVATE_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_VERSION: "2.8.1"
         run: |
-          # Auf einem Versions-Tag muss die Signatur da sein: ein Release ohne
-          # sie ist fuer den Updater wertlos. Auf jedem anderen Ereignis darf
-          # sie fehlen, solange das Secret noch nicht angelegt ist. Sonst waere
-          # der main-Job ab dem Merge dauerhaft rot.
-          if [ -z "$BLITZTEXT_UPDATE_PRIVATE_KEY" ]; then
-            if [ "${GITHUB_REF#refs/tags/v}" != "$GITHUB_REF" ]; then
-              echo "::error::Secret BLITZTEXT_UPDATE_PRIVATE_KEY fehlt. Ohne Signatur ist dieses Release fuer den Updater unbrauchbar."
-              exit 1
-            fi
-            echo "::notice::Secret BLITZTEXT_UPDATE_PRIVATE_KEY fehlt, dieser Build bleibt ohne Signatur. Das .sig-Asset entsteht, sobald der Schluessel hinterlegt ist."
-            exit 0
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::error::Secret SPARKLE_PRIVATE_KEY fehlt. Ohne Signatur lehnt jede Installation dieses Update ab."
+            exit 1
           fi
-          swift Scripts/sign-update.swift \
-            Blitztext-macos-universal.zip \
-            Blitztext-macos-universal.zip.sig
-          ls -lh Blitztext-macos-universal.zip.sig
+
+          curl -fsSL -o sparkle.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          mkdir -p sparkle
+          tar -xJf sparkle.tar.xz -C sparkle
+
+          # sign_update liefert die fertigen Attribute, zum Beispiel
+          # sparkle:edSignature="..." length="12345"
+          SIGNATURE_LINE="$(printf '%s' "$SPARKLE_PRIVATE_KEY" \
+            | ./sparkle/bin/sign_update Blitztext-macos-universal.zip --ed-key-file -)"
+          if [ -z "$SIGNATURE_LINE" ]; then
+            echo "::error::sign_update hat keine Signatur geliefert."
+            exit 1
+          fi
+
+          SHORT_VERSION="${GITHUB_REF_NAME#v}"
+          BUILD_VERSION="$(sed -n 's/^ *CURRENT_PROJECT_VERSION: *"\{0,1\}\([0-9]*\)"\{0,1\} *$/\1/p' BlitztextMac/project.yml | head -1)"
+          MIN_SYSTEM="$(sed -n 's/^ *MACOSX_DEPLOYMENT_TARGET: *"\{0,1\}\([0-9.]*\)"\{0,1\} *$/\1/p' BlitztextMac/project.yml | head -1)"
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/Blitztext-macos-universal.zip"
+
+          cat > appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Blitztext</title>
+              <item>
+                <title>Blitztext ${SHORT_VERSION}</title>
+                <pubDate>$(date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+                <sparkle:version>${BUILD_VERSION}</sparkle:version>
+                <sparkle:shortVersionString>${SHORT_VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>${MIN_SYSTEM}</sparkle:minimumSystemVersion>
+                <enclosure url="${DOWNLOAD_URL}" type="application/octet-stream" ${SIGNATURE_LINE} />
+              </item>
+            </channel>
+          </rss>
+          XML
+          cat appcast.xml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -105,12 +136,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="main-${GITHUB_SHA:0:7}"
-          # Die Asset-Liste entsteht aus dem, was wirklich da ist. Solange kein
-          # Signier-Schluessel hinterlegt ist, gibt es keine .sig-Datei.
+          # main-Builds sind Prereleases und werden nie ueber Sparkle verteilt;
+          # deshalb liegt hier nur das Archiv, kein appcast.xml.
           ASSETS=(Blitztext-macos-universal.zip)
-          if [ -f Blitztext-macos-universal.zip.sig ]; then
-            ASSETS+=(Blitztext-macos-universal.zip.sig)
-          fi
           gh release create "$TAG" \
             "${ASSETS[@]}" \
             --title "Blitztext main build (${GITHUB_SHA:0:7})" \
@@ -127,13 +155,9 @@ jobs:
         run: |
           # The Windows job may publish the same tag's release first, so fall
           # back to uploading into the existing release.
-          # Auf einem Versions-Tag ist die .sig-Datei durch den Signier-Schritt
-          # garantiert; die Pruefung kostet nichts und haelt beide Publish-
-          # Schritte gleich.
-          ASSETS=(Blitztext-macos-universal.zip)
-          if [ -f Blitztext-macos-universal.zip.sig ]; then
-            ASSETS+=(Blitztext-macos-universal.zip.sig)
-          fi
+          # appcast.xml gehoert zwingend dazu: die installierten Apps lesen es
+          # unter releases/latest/download/appcast.xml.
+          ASSETS=(Blitztext-macos-universal.zip appcast.xml)
           gh release create "$GITHUB_REF_NAME" \
             "${ASSETS[@]}" \
             --title "Blitztext $GITHUB_REF_NAME" \

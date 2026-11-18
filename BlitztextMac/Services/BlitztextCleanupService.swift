@@ -19,11 +19,9 @@ enum BlitztextCleanupService {
     }
 
     static func cleanupUserData() -> CleanupReport {
-        KeychainService.delete(key: .openAIAPIKey)
-        KeychainService.delete(key: .liteLLMAPIKey)
-
-        return cleanup(paths: [
+        cleanup(paths: [
             AppSupportPaths.settingsURL,
+            AppSupportPaths.credentialsURL,
             AppSupportPaths.appSupportDirectoryURL,
             AppSupportPaths.cachesDirectoryURL,
             AppSupportPaths.preferencesURL,
@@ -36,12 +34,10 @@ enum BlitztextCleanupService {
     }
 
     static func removeApplicationSupportFiles() -> CleanupReport {
-        KeychainService.delete(key: .openAIAPIKey)
-        KeychainService.delete(key: .liteLLMAPIKey)
-
-        return cleanup(
+        cleanup(
             paths: [
                 AppSupportPaths.settingsURL,
+                AppSupportPaths.credentialsURL,
                 AppSupportPaths.appSupportDirectoryURL
             ],
             unregisterLaunchAtLogin: false
@@ -57,12 +53,6 @@ enum BlitztextCleanupService {
             ],
             unregisterLaunchAtLogin: false
         )
-    }
-
-    /// Loescht Reste abgebrochener Update-Downloads. Wird beim Start gerufen,
-    /// dann laeuft garantiert kein Download.
-    static func removeStaleUpdateDownloads() {
-        try? FileManager.default.removeItem(at: AppSupportPaths.updatesDirectoryURL)
     }
 
     static func knownInstallBundleURLs() -> [URL] {
