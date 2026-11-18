@@ -145,6 +145,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Unit tests (TypeScript)
+        run: npm test
+
       # tsc + vite. Erzeugt auch dist/, das der Rust-Build einbettet.
       - name: Build frontend
         run: npm run build
@@ -154,3 +157,6 @@ jobs:
       # braucht es weder Optimierung noch Installer.
       - name: Build Rust (Debug, no bundle)
         run: cargo build --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Unit tests (Rust)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked

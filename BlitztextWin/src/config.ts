@@ -42,6 +42,20 @@ export interface Settings {
   };
 }
 
+// Gleiche Regel wie `normalize_base` in src-tauri/src/settings.rs: aus einer
+// eingegebenen Gateway-Adresse die nackte Basis machen. Entfernt abschliessende
+// Schraegstriche sowie abschliessende "/v1"- und "/ui"-Segmente in beliebiger
+// Reihenfolge, ohne auf Gross- und Kleinschreibung zu achten.
+export function normalizeBaseUrl(raw: string): string {
+  let value = raw.trim().replace(/\/+$/, "");
+  for (;;) {
+    const lower = value.toLowerCase();
+    if (!lower.endsWith("/v1") && !lower.endsWith("/ui")) break;
+    value = value.slice(0, -3).replace(/\/+$/, "");
+  }
+  return value;
+}
+
 // The four dictation workflows, mirroring the macOS app.
 export type WorkflowType = "transcribe" | "improve" | "dampf" | "emoji";
 

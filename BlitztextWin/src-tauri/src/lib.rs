@@ -1,3 +1,7 @@
+mod settings;
+
+use settings::normalize_base;
+
 // Secret storage backed by the OS credential store
 // (macOS Keychain via apple-native, Windows Credential Manager via windows-native).
 const KEYRING_SERVICE: &str = "app.blitztext.win";
@@ -29,24 +33,6 @@ fn secret_has(account: String) -> Result<bool, String> {
 fn litellm_key() -> Result<String, String> {
     secret_get(LITELLM_KEY_ACCOUNT.to_string())?
         .ok_or_else(|| "Kein API-Key gespeichert.".to_string())
-}
-
-/// Normalizes a user-entered gateway URL to the bare base, so we can append the
-/// API paths ourselves. Strips a trailing slash and any trailing `/v1` or `/ui`
-/// segments (in any order) — people often paste the LiteLLM web UI URL
-/// (".../ui") or an OpenAI-style ".../v1" base.
-fn normalize_base(base: &str) -> String {
-    let mut value = base.trim().trim_end_matches('/').to_string();
-    loop {
-        let lower = value.to_lowercase();
-        if lower.ends_with("/v1") || lower.ends_with("/ui") {
-            value.truncate(value.len() - 3);
-            value = value.trim_end_matches('/').to_string();
-        } else {
-            break;
-        }
-    }
-    value
 }
 
 /// Lists the models the gateway exposes. Used by the "test connection" button
