@@ -69,8 +69,16 @@ Umfang: Vitest fuer TypeScript, `cargo test` fuer Rust, beides in der CI.
 `CustomMode` als gemeinsames Schema in `shared/`, Ablage der Einstellungen in
 einer JSON-Datei im Konfigurationsordner statt in `localStorage` (einmalige
 Uebernahme der Altdaten), Modusverwaltung in der Oberflaeche, Tastenkuerzel je
-Modus statt je Workflow. Ein Modus ohne Anweisung bleibt wortwoertlich und
-ruft kein Sprachmodell.
+Modus. Ein Modus ohne Anweisung bleibt wortwoertlich und ruft kein
+Sprachmodell. Die vier eingebauten Modi bleiben eingebaut, eigene Modi kommen
+dazu, wie auf dem Mac (`WorkflowType` mit `case custom(String)`). Startbestand
+wie auf dem Mac: einmalig "Als E-Mail" und "Stichpunkte".
+
+Nachlauf zu TP1, als eigener Plan: die Prompts der eingebauten Modi stammen
+unter Windows noch aus der Zeit von 1.6. Der Mac 1.18 gibt ihnen zusaetzlich
+`transcriptIsNotARequest`, die Rahmenregel aus `RewriteGuard`, die
+Diktatregeln und englische Fassungen. Ohne diesen Nachlauf beantwortet
+Blitztext+ unter Windows eine diktierte Frage, statt sie zu bearbeiten.
 
 ### TP2: Einstellungsfenster, dauerhafter Verlauf, Mikrofonauswahl
 

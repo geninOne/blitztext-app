@@ -2,8 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Die Windows-App bekommt frei anlegbare Modi anstelle der vier fest
-verdrahteten Workflows, auf einem Testfundament, das die folgenden Stufen traegt.
+**Goal:** Die Windows-App bekommt frei anlegbare eigene Modi neben den vier
+eingebauten, wie der Mac 1.18.1, auf einem Testfundament, das die folgenden
+Stufen traegt.
+
+> **Korrektur waehrend der Ausfuehrung (nach Task 4):** Urspruenglich sollten
+> die vier Workflows in eigene Modi umgewandelt werden. Der Mac tut das nicht:
+> `WorkflowType` kennt eingebaute Modi und eigene (`case custom(String)`), das
+> Menue zeigt die eingebauten zuerst. Die eingebauten bekommen Schutzregeln,
+> die eigene Modi nicht bekommen (`transcriptIsNotARequest`, Rahmenregel). Eine
+> Umwandlung haette diese Regeln entfernt. Task 6 und Task 7 sind deshalb neu
+> gefasst, die eingebauten Modi bleiben unveraendert.
 
 **Architecture:** Das Modell `CustomMode` kommt aus `shared/`, damit Mac und
 Windows dieselben Vorlagen und dieselbe Prompt-Zusammensetzung benutzen. Die
@@ -40,8 +49,10 @@ Vite, Vitest, `cargo test`.
   Standardwerten statt mit leerem Zustand (Task 3).
 - Geloeschter Modus mit registriertem Kuerzel: das Kuerzel wird freigegeben
   und loest nichts mehr aus (Task 5).
-- Altdaten aus `localStorage`: genau einmal uebernommen, ein zweiter Start
-  erzeugt keine doppelten Modi (Task 7).
+- Startmodi: genau einmal angelegt, ein geloeschter Startmodus kommt nach
+  einem Neustart nicht wieder (Task 7).
+- Eigener Modus und eingebauter Modus mit demselben Kuerzel: das Abzeichen des
+  vorigen Halters verschwindet, nach Neustart loest nur der neue aus (Task 5).
 - Erster Start nach dem Update: Gateway-Adresse und Kuerzel sind noch da,
   obwohl die Ablage gewechselt hat (Task 3).
 - Modellschritt schlaegt fehl oder antwortet leer: das Gesagte wird trotzdem
@@ -476,10 +487,14 @@ git commit -m "Windows: Tastenkuerzel haengen an Modi statt an festen Workflows"
   `night` ("Lila") wie auf dem Mac; die Farbwerte aus
   `BlitztextShared/Design/BlackboatTokens.swift`, als CSS-Variablen in
   `index.html`, mit hellem und dunklem Modus wie die vorhandene Palette.
-- Der neue Abschnitt "Modi" steht oben im Tab "Anpassen". Die alten Abschnitte
-  ("Tastenkuerzel" je Workflow, "Blitztext+", "Blitztext $%&!", "Blitztext :)")
-  bleiben in dieser Task stehen, Task 7 entfernt sie nach der Uebernahme.
-  "Eigennamen" bleibt dauerhaft, er gilt fuer alle Modi.
+- Der neue Abschnitt "Modi" steht oben im Tab "Anpassen" und verwaltet nur
+  eigene Modi. Die alten Abschnitte ("Tastenkuerzel", "Blitztext+",
+  "Blitztext $%&!", "Blitztext :)") bleiben dauerhaft, sie konfigurieren die
+  eingebauten Modi. "Eigennamen" gilt fuer alle Modi.
+- Weist der Rekorder einer Kennung ein Kuerzel zu und `set_hotkey` war
+  erfolgreich, verliert jeder andere Schluessel in `settings.hotkeys` mit
+  demselben Kuerzel seinen Eintrag (reine Funktion
+  `assignHotkey(settings, id, accelerator): string[]`, getestet).
 - Das Kuerzel je Modus nimmt der vorhandene Rekorder auf (`renderHotkey` in
   `popover.ts`, etwa Zeile 678). Er wird so verallgemeinert, dass er eine
   beliebige Kennung annimmt; keine zweite Aufnahmelogik daneben.
@@ -541,8 +556,23 @@ git commit -m "Windows: Modi anlegen, bearbeiten und loeschen"
 - Modify: `BlitztextWin/src/popover.ts` (Menueansicht, Aufnahmeablauf)
 - Modify: `BlitztextWin/src-tauri/src/lib.rs` (Kommando `detect_language`)
 - Modify: `BlitztextWin/src-tauri/Cargo.toml` (`whatlang`)
+- Modify: `BlitztextWin/src/modes.ts`, `shared/prompts.json` (`modeFrames`, Sprachparameter)
 - Create: `BlitztextWin/src/run-mode.ts`
 - Create: `BlitztextWin/src/run-mode.test.ts`
+
+**Neufassung nach Task 4 (bindend):** Das Menue zeigt zuerst die vier
+eingebauten Modi wie bisher, darunter die eigenen Modi aus `settings.modes`
+(wie `builtInMenuCases` plus eigene auf dem Mac). Das Ereignis `hotkey-down`
+traegt entweder einen eingebauten Namen (`transcribe`, `improve`, `dampf`,
+`emoji`) oder eine Modus-Kennung `custom-...`. Eingebaute Modi laufen ueber den
+vorhandenen Weg mit `systemPromptFor`, unveraendert. Eigene Modi laufen ueber
+`runMode`. Eigennamen fuer eigene Modi: `settings.improve.customTerms` (der
+Abschnitt "Eigennamen"). Kontext: leer, denn die Windows-App liest das Textfeld
+unter dem Cursor noch nicht (auf dem Mac `FocusedFieldReader`); das ist eine
+spaetere Stufe. Eine unbekannte `custom-...`-Kennung (Modus geloescht) loest
+nichts aus. Die Handler fuer `hotkey-down` und `hotkey-up` in `popover.ts`
+ignorieren seit Task 5 jede Kennung ausser den vier eingebauten; diese Sperre
+ersetzt Task 6.
 
 **Interfaces:**
 - Consumes: Tasks 2, 3. Aus Task 2 auch `spokenTranscriptRules` in
@@ -625,80 +655,85 @@ git commit -m "Windows: Aufnahme laeuft ueber den gewaehlten Modus"
 
 ---
 
-### Task 7: Uebernahme der Altdaten
+### Task 7: Startbestand und verwaiste Kuerzel
 
 **Files:**
-- Create: `BlitztextWin/src/migrate.ts`
-- Create: `BlitztextWin/src/migrate.test.ts`
-- Modify: `BlitztextWin/src/settings-store.ts` (`loadSettings` ruft die Uebernahme)
-- Modify: `BlitztextWin/src/popover.ts`, `BlitztextWin/index.html` (alte Workflow-Abschnitte entfernen)
+- Create: `BlitztextWin/src/seed.ts`
+- Create: `BlitztextWin/src/seed.test.ts`
+- Modify: `BlitztextWin/src/config.ts` (`hasSeededCustomModes`)
+- Modify: `BlitztextWin/src/settings-store.ts` oder `popover.ts` (Aufruf beim Start)
+
+**Neufassung nach Task 4 (bindend):** Die eingebauten Modi bleiben eingebaut
+(siehe Korrektur oben), es gibt nichts umzuwandeln. Stattdessen macht diese
+Task, was der Mac beim Start tut (`AppState.seedCustomModesIfNeeded` und
+`removeCustomModeOrphans` in `BlitztextMac/App/AppState.swift`):
+
+- Einmalig die Vorlagen `email` und `bullets` als eigene Modi anlegen
+  (`CustomModeTemplate.defaultSeeds`), gesteuert ueber
+  `Settings.hasSeededCustomModes: boolean` (Standard `false`). Danach geloeschte
+  Modi bleiben geloescht.
+- Kuerzel von eigenen Modi, die es nicht mehr gibt, beim Start aus
+  `settings.hotkeys` entfernen. Eingebaute Schluessel (`transcribe`, `improve`,
+  `dampf`, `emoji`) sind nie verwaist.
+- Seit Task 5 bedeutet ein leerer Eintrag `""` "bewusst kein Kuerzel". Bei
+  eingebauten Schluesseln darf er nicht geloescht werden, sonst legt der Lader
+  beim naechsten Start das Standardkuerzel wieder darunter.
+- `settingsVersion` bleibt bei `1`, es wird nicht mehr gebraucht.
 
 **Interfaces:**
-- Consumes: Tasks 2, 3.
-- Produces: `migrateToModes(settings: Settings): Settings | null`
-  (`null`, wenn `settingsVersion` schon `2` oder hoeher ist)
-
-**Nachtrag aus der Pruefung von Task 2 (bindend):** Die urspruengliche
-Bedingung "Datei hat kein Feld `modes`" greift nie: seit Task 2 ist `modes`
-Teil der Standardwerte, und Task 3 schreibt die Datei beim ersten Start. Die
-Uebernahme haengt deshalb an `settingsVersion`: sie laeuft bei `< 2`, setzt
-danach `2` und speichert einmal. Die Altwerte (`improve`, `dampf`, `emoji`,
-`hotkeys`) stehen seit Task 3 bereits in der Datei, `localStorage` wird hier
-nicht mehr gelesen.
+- Consumes: Task 2 (`modeTemplates`, `modeFromTemplate`), Task 3 (Ablage).
+- Produces:
+  - `seedCustomModesIfNeeded(settings: Settings): boolean` (wahr, wenn
+    angelegt wurde und gespeichert werden muss)
+  - `removeCustomModeOrphans(settings: Settings): boolean` (wahr, wenn etwas
+    entfernt wurde)
 
 - [ ] **Schritt 1: Fehlschlagende Tests schreiben**
 
 ```ts
-it("macht aus den vier Workflows vier Modi", () => {
-  const s = migrateToModes(altbestand)!;
-  expect(s.modes.map((m) => m.name)).toEqual(["Diktat", "Text verbessern", "Dampf ablassen", "Emojis"]);
+it("legt beim ersten Start Als E-Mail und Stichpunkte an", () => {
+  const s = defaults();
+  expect(seedCustomModesIfNeeded(s)).toBe(true);
+  expect(s.modes.map((m) => m.name)).toEqual(["Als E-Mail", "Stichpunkte"]);
+  expect(s.hasSeededCustomModes).toBe(true);
 });
-
-it("uebernimmt die Kuerzel der alten Workflows", () => { /* Super+Shift+KeyD haengt am Diktat-Modus */ });
-
-it("laeuft nur einmal", () => {
-  const einmal = migrateToModes(altbestand)!;
-  expect(einmal.settingsVersion).toBe(2);
-  expect(migrateToModes(einmal)).toBeNull();
+it("legt nichts an, wenn schon einmal angelegt wurde, auch wenn die Liste leer ist", () => {
+  /* hasSeededCustomModes true, modes []: false, modes bleibt [] */
 });
+it("haengt die Startmodi an vorhandene eigene Modi an", () => { /* ... */ });
+it("entfernt Kuerzel von geloeschten eigenen Modi", () => {
+  /* hotkeys hat "custom-weg" ohne passenden Modus: entfernt, Rueckgabe true */
+});
+it("laesst die Kuerzel der eingebauten Modi stehen", () => { /* transcribe, improve, dampf, emoji bleiben */ });
 ```
 
 - [ ] **Schritt 2: Lauf pruefen**
 
 Run: `cd BlitztextWin && npm test`
-Expected: FAIL.
+Expected: FAIL, Modul fehlt.
 
-- [ ] **Schritt 3: `migrate.ts` umsetzen**
+- [ ] **Schritt 3: Umsetzen und beim Start aufrufen**
 
-Aus `improve`, `dampf`, `emoji` werden Modi mit der jeweiligen Anweisung aus
-`shared/prompts.json`; aus `transcribe` wird ein Modus ohne Anweisung. Die
-Kuerzel werden auf die neuen IDs umgehaengt. `loadSettings` ruft die Uebernahme
-bei `settingsVersion < 2` und schreibt danach einmal.
+Nach `loadSettings` beide Funktionen aufrufen, bei wahr einmal speichern. Erst
+danach die Kuerzel registrieren, damit verwaiste gar nicht erst angemeldet
+werden.
 
 - [ ] **Schritt 4: Lauf pruefen**
 
-Run: `cd BlitztextWin && npm test`
-Expected: PASS, drei Tests.
+Run: `cd BlitztextWin && npm test && npm run build`
+Expected: PASS.
 
-- [ ] **Schritt 5: Alte Abschnitte entfernen**
+- [ ] **Schritt 5: Von Hand nachsehen**
 
-Nach der Uebernahme steuern `improve`, `dampf`, `emoji` und die Kuerzel je
-Workflow nichts mehr. Die Abschnitte "Tastenkuerzel" (je Workflow),
-"Blitztext+", "Blitztext $%&!" und "Blitztext :)" verschwinden aus
-`index.html` und `popover.ts`, ebenso ihre Aufnahme der Workflow-Kuerzel beim
-Start. "Eigennamen" bleibt. Die Felder in `Settings` bleiben vorerst stehen
-(Rueckweg), werden aber nicht mehr angezeigt.
+`npm run tauri dev` mit frischer Einstellungsdatei: im Menue stehen die vier
+eingebauten Modi und darunter "Als E-Mail" und "Stichpunkte". Einen davon
+loeschen, neu starten: er bleibt geloescht.
 
-- [ ] **Schritt 6: Von Hand nachsehen**
-
-`npm run tauri dev` auf dem Mac: die vier Modi stehen im Menue, ihre Kuerzel
-loesen aus, ein neuer Modus laesst sich anlegen und loeschen.
-
-- [ ] **Schritt 7: Commit**
+- [ ] **Schritt 6: Commit**
 
 ```bash
-git add BlitztextWin/src/migrate.ts BlitztextWin/src/migrate.test.ts BlitztextWin/src/settings-store.ts BlitztextWin/src/popover.ts BlitztextWin/index.html
-git commit -m "Windows: alte Workflow-Einstellungen werden zu Modi"
+git add BlitztextWin/src/seed.ts BlitztextWin/src/seed.test.ts BlitztextWin/src/config.ts BlitztextWin/src/settings-store.ts BlitztextWin/src/popover.ts
+git commit -m "Windows: Startmodi wie auf dem Mac, verwaiste Kuerzel weg"
 ```
 
 ---
@@ -707,6 +742,6 @@ git commit -m "Windows: alte Workflow-Einstellungen werden zu Modi"
 
 - `npm test` und `cargo test` gruen, in der CI auf `windows-latest` ebenso.
 - Der Installer aus der CI startet auf einem echten Windows-Rechner, die vier
-  uebernommenen Modi sind da, ein eigener Modus laesst sich anlegen und per
-  Tastenkuerzel ausloesen.
+  eingebauten Modi und die zwei Startmodi sind da, ein eigener Modus laesst
+  sich anlegen und per Tastenkuerzel ausloesen.
 - `BlitztextWin/HANDOFF.md` nennt den neuen Stand und zeigt auf diesen Plan.
