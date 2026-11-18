@@ -683,7 +683,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   async function applyHotkey(workflow: WorkflowType, accel: string): Promise<void> {
     try {
-      await invoke("set_hotkey", { workflow, accelerator: accel });
+      await invoke("set_hotkey", { modeId: workflow, accelerator: accel });
       settings.hotkeys[workflow] = accel;
       persist();
       renderHotkey(workflow);
@@ -762,7 +762,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   renderRows();
   for (const workflow of WORKFLOW_ORDER) {
     try {
-      await invoke("set_hotkey", { workflow, accelerator: settings.hotkeys[workflow] });
+      await invoke("set_hotkey", { modeId: workflow, accelerator: settings.hotkeys[workflow] });
     } catch {
       /* invalid combo surfaced when the user edits it */
     }
