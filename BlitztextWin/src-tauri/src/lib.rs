@@ -2,6 +2,33 @@ mod settings;
 
 use settings::normalize_base;
 
+const SETTINGS_FILE: &str = "settings.json";
+
+fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(dir.join(SETTINGS_FILE))
+}
+
+/// Liefert die gespeicherten Einstellungen als JSON-Text, "{}" wenn noch keine
+/// (gueltige) Datei existiert. Der API-Schluessel liegt nie hier, sondern im
+/// Schluesselbund (`secret_set`).
+#[tauri::command]
+fn settings_load(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(settings::read_settings_file(&settings_path(&app)?))
+}
+
+/// Speichert die Einstellungen. Nur ein JSON-Objekt wird angenommen, damit kein
+/// fehlerhafter Aufruf die Datei mit Unsinn ueberschreibt.
+#[tauri::command]
+fn settings_save(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(serde_json::Value::Object(_)) => {}
+        _ => return Err("Einstellungen sind kein JSON-Objekt".to_string()),
+    }
+    settings::write_settings_file(&settings_path(&app)?, &json).map_err(|e| e.to_string())
+}
+
 // Secret storage backed by the OS credential store
 // (macOS Keychain via apple-native, Windows Credential Manager via windows-native).
 const KEYRING_SERVICE: &str = "app.blitztext.win";
@@ -544,6 +571,8 @@ pub fn run() {
         .manage(TrayRect::default())
         .manage(AudioRecorder::default())
         .invoke_handler(tauri::generate_handler![
+            settings_load,
+            settings_save,
             secret_set,
             secret_get,
             secret_has,

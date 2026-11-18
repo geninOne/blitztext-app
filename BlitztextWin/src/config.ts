@@ -10,6 +10,8 @@ export type EmojiDensity = "wenig" | "mittel" | "viel";
 export type HotkeyMode = "hold" | "toggle";
 
 export interface Settings {
+  // Stand des Einstellungsformats; spaetere Uebernahmen erhoehen ihn.
+  settingsVersion: number;
   apiProvider: ApiProvider;
   // Launch the app on login (Windows: registry Run key / macOS: LaunchAgent).
   autostart: boolean;
@@ -83,6 +85,7 @@ const SETTINGS_KEY = "blitztext.settings";
 export const LITELLM_KEY_ACCOUNT = "liteLLMApiKey";
 
 export const defaultSettings: Settings = {
+  settingsVersion: 1,
   apiProvider: "liteLLM",
   autostart: false,
   hotkeyMode: "hold",
@@ -116,33 +119,16 @@ export const defaultSettings: Settings = {
   },
 };
 
-export function loadSettings(): Settings {
+// Liest die frueheren Einstellungen roh aus dem localStorage, nur fuer die
+// einmalige Uebernahme in die Datei (siehe settings-store.ts). Der Eintrag
+// bleibt stehen, als Rueckweg. null, wenn nichts da oder unlesbar.
+export function readLegacySettings(): unknown | null {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return structuredClone(defaultSettings);
-    const parsed = JSON.parse(raw);
-    return {
-      ...structuredClone(defaultSettings),
-      ...parsed,
-      liteLLM: { ...defaultSettings.liteLLM, ...(parsed.liteLLM ?? {}) },
-      hotkeys: { ...defaultSettings.hotkeys, ...(parsed.hotkeys ?? {}) },
-      improve: { ...defaultSettings.improve, ...(parsed.improve ?? {}) },
-      // An empty stored dampf prompt falls back to the default text, so the
-      // pre-filled instruction is always visible (and editable).
-      dampf: {
-        systemPrompt: parsed.dampf?.systemPrompt?.trim()
-          ? parsed.dampf.systemPrompt
-          : defaultSettings.dampf.systemPrompt,
-      },
-      emoji: { ...defaultSettings.emoji, ...(parsed.emoji ?? {}) },
-    };
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    return structuredClone(defaultSettings);
+    return null;
   }
-}
-
-export function saveSettings(settings: Settings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
 // Secret helpers backed by the Rust keyring commands.

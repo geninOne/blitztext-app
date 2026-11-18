@@ -3,8 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   defaultSettings,
-  loadSettings,
-  saveSettings,
   setSecret,
   hasSecret,
   LITELLM_KEY_ACCOUNT,
@@ -17,6 +15,7 @@ import {
   type HotkeyMode,
 } from "./config";
 import { systemPromptFor } from "./prompts";
+import { loadSettings, saveSettings } from "./settings-store";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -99,8 +98,15 @@ type HistoryEntry = {
 const MAX_HISTORY = 10;
 
 window.addEventListener("DOMContentLoaded", async () => {
-  let settings: Settings = loadSettings();
-  const persist = () => saveSettings(settings);
+  // Einmal aus der Datei laden; danach ist dieses Objekt die einzige Quelle,
+  // Menue und Einstellungen teilen sich dasselbe Fenster.
+  const settings: Settings = await loadSettings();
+  // Speichert im Hintergrund; ein Fehler darf die Bedienung nicht unterbrechen.
+  const persist = () => {
+    saveSettings(settings).catch((error) =>
+      console.error("Einstellungen nicht gespeichert:", error),
+    );
+  };
   const history: HistoryEntry[] = [];
 
   // --- View switching (menu <-> settings, in the same popover) ---
@@ -167,7 +173,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   async function startRecording(workflow: WorkflowType): Promise<void> {
     if (recording || busy) return;
-    settings = loadSettings(); // pick up changes made in the settings view
     currentWorkflow = workflow;
     try {
       await invoke("record_start");
@@ -456,7 +461,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   updateAutomaticEl.checked = settings.automaticUpdateChecks;
   updateAutomaticEl.addEventListener("change", () => {
     settings.automaticUpdateChecks = updateAutomaticEl.checked;
-    saveSettings(settings);
+    persist();
   });
 
   function letztePruefungText(): string {
@@ -499,7 +504,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       const treffer = await check();
       settings.lastUpdateCheck = new Date().toISOString();
-      saveSettings(settings);
+      persist();
 
       if (!treffer) {
         verfuegbaresUpdate = null;
@@ -522,7 +527,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
       if (istKeinManifestVorhanden(error)) {
         settings.lastUpdateCheck = new Date().toISOString();
-        saveSettings(settings);
+        persist();
         updateStatusEl.textContent = `Blitztext ist aktuell. ${letztePruefungText()}`;
         return;
       }
