@@ -22,9 +22,22 @@ export function hasInstruction(mode: CustomMode): boolean {
   return mode.prompt.trim().length > 0;
 }
 
-// Die Vorlagen als frische Modi mit eigener ID, in der Reihenfolge der Datei.
-export function modeTemplates(): CustomMode[] {
-  return promptData.modeTemplates.map((t) => newMode(t.name, t.icon, t.prompt));
+// Eine Vorlage mit fester Kennung ("email", "bullets" ...), wie `CustomModeTemplate`.
+export interface ModeTemplate {
+  id: string;
+  name: string;
+  icon: string;
+  prompt: string;
+}
+
+// Die fuenf Vorlagen in der Reihenfolge der Datei; die Kennungen bleiben stabil.
+export function modeTemplates(): ModeTemplate[] {
+  return promptData.modeTemplates.map((t) => ({ ...t }));
+}
+
+// Macht aus einer Vorlage einen Modus mit frischer ID, wie `makeMode()` auf dem Mac.
+export function modeFromTemplate(template: ModeTemplate): CustomMode {
+  return newMode(template.name, template.icon, template.prompt);
 }
 
 // Wie CustomModeWorkflow auf dem Mac: Anweisung, geschuetzte Eigennamen,
